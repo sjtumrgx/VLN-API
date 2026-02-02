@@ -35,10 +35,16 @@ WAYPOINT_PROMPT = """Based on the scene analysis and navigation intent, suggest 
 
 **Scene:** {scene_summary}
 **Intent:** {intent}
-**Image size:** {width}x{height}
+**Image size:** 640x640 (coordinate origin at top-left, x increases rightward, y increases downward)
 
-The waypoints go from bottom (near) to top (far) with equal vertical spacing.
-Waypoint 1 starts at bottom center (x={center_x}).
+The 5 waypoints have FIXED y-coordinates (vertical positions):
+- Waypoint 1: y={y1} (bottom, nearest to robot)
+- Waypoint 2: y={y2}
+- Waypoint 3: y={y3}
+- Waypoint 4: y={y4}
+- Waypoint 5: y={y5} (top, farthest from robot)
+
+Waypoint 1 starts at bottom center (x=320).
 
 Suggest x-coordinates for waypoints 2-5 based on the scene. Consider:
 - Obstacles to avoid
@@ -53,11 +59,12 @@ Output JSON:
 }}
 ```
 
-x values should be between 0 and {width}."""
+x values should be between 0 and 640."""
 
 WAYPOINT_SYSTEM_PROMPT = """You are a path planning system.
-Given scene analysis, suggest waypoint positions for navigation.
-Output valid JSON with x-coordinates."""
+Given scene analysis, suggest waypoint x-coordinates for navigation.
+Coordinate system: origin at top-left, x increases rightward, y increases downward.
+Output valid JSON with x-coordinates only (y-coordinates are fixed)."""
 
 
 class WaypointGenerator:
@@ -82,21 +89,24 @@ class WaypointGenerator:
         image_size: Tuple[int, int],
         scene_analysis: Optional[SceneAnalysisResult] = None,
         task_reasoning: Optional[TaskReasoningResult] = None,
+        pad_h: int = 0,
     ) -> WaypointGenerationResult:
         """Generate navigation waypoints.
 
         Args:
-            image_size: (width, height) of the image
+            image_size: (width, height) of the image (640, 640)
             scene_analysis: Optional scene analysis result
             task_reasoning: Optional task reasoning result
+            pad_h: Vertical padding from letterbox (actual image starts at pad_h)
 
         Returns:
             WaypointGenerationResult with 5 waypoints
         """
         width, height = image_size
 
-        # Calculate vertical positions (equal spacing from bottom to top)
-        y_positions = self._calculate_vertical_positions(height)
+        # Calculate vertical positions based on actual image region (excluding padding)
+        # Actual image region: from pad_h to (height - pad_h)
+        y_positions = self._calculate_vertical_positions(height, pad_h)
 
         # First waypoint is always at bottom center
         center_x = width // 2
@@ -105,7 +115,7 @@ class WaypointGenerator:
         # Get horizontal positions for remaining waypoints
         if self.llm_client and scene_analysis:
             llm_x_positions, raw_response = await self._get_llm_positions(
-                image_size, scene_analysis, task_reasoning
+                image_size, scene_analysis, task_reasoning, y_positions
             )
             if llm_x_positions:
                 x_positions.extend(llm_x_positions)
@@ -132,22 +142,27 @@ class WaypointGenerator:
             raw_response=raw_response,
         )
 
-    def _calculate_vertical_positions(self, height: int) -> List[int]:
-        """Calculate equal vertical spacing for waypoints.
+    def _calculate_vertical_positions(self, height: int, pad_h: int = 0) -> List[int]:
+        """Calculate vertical positions for waypoints within actual image region.
 
         Args:
-            height: Image height
+            height: Total image height (640)
+            pad_h: Vertical padding from letterbox
 
         Returns:
-            List of y-coordinates from bottom to top
+            List of y-coordinates from bottom to top (within actual image region)
         """
-        # Start from bottom (height) to top
-        # Leave some margin at top (10% of height)
-        top_margin = int(height * 0.1)
-        bottom = height
-        top = top_margin
+        # Actual image region: from pad_h (top) to (height - pad_h) (bottom)
+        image_top = pad_h
+        image_bottom = height - pad_h
+        image_height = image_bottom - image_top
 
-        # Equal spacing
+        # Waypoint 1 (nearest): at bottom of actual image
+        # Waypoint 5 (farthest): at middle of actual image (not at top, to stay in visible area)
+        bottom = image_bottom
+        top = image_top + image_height // 2  # Middle of actual image
+
+        # Equal spacing from bottom to middle
         step = (bottom - top) / (self.num_waypoints - 1)
         return [int(bottom - i * step) for i in range(self.num_waypoints)]
 
@@ -156,6 +171,7 @@ class WaypointGenerator:
         image_size: Tuple[int, int],
         scene_analysis: SceneAnalysisResult,
         task_reasoning: Optional[TaskReasoningResult],
+        y_positions: List[int],
     ) -> Tuple[Optional[List[int]], str]:
         """Get horizontal positions from LLM.
 
@@ -163,16 +179,17 @@ class WaypointGenerator:
             Tuple of (x_positions for waypoints 2-5, raw_response)
         """
         width, height = image_size
-        center_x = width // 2
 
         intent = task_reasoning.intent if task_reasoning else "navigate forward"
 
         prompt = WAYPOINT_PROMPT.format(
             scene_summary=scene_analysis.summary,
             intent=intent,
-            width=width,
-            height=height,
-            center_x=center_x,
+            y1=y_positions[0],
+            y2=y_positions[1],
+            y3=y_positions[2],
+            y4=y_positions[3],
+            y5=y_positions[4],
         )
 
         try:

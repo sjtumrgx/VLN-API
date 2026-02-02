@@ -392,7 +392,7 @@ class EmbodiedNavigationSystem:
             return
 
         # Letterbox frame to 640x640 for consistent processing
-        frame, _, _ = letterbox(frame, target_size=(640, 640))
+        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
         image_size = (640, 640)
 
         try:
@@ -407,11 +407,12 @@ class EmbodiedNavigationSystem:
             )
             logger.debug(f"Intent: {task_reasoning.intent}")
 
-            # Generate waypoints
+            # Generate waypoints (pass padding info for correct positioning)
             waypoint_result = await self.waypoint_generator.generate(
                 image_size=image_size,
                 scene_analysis=scene_analysis,
                 task_reasoning=task_reasoning,
+                pad_h=pad_h,
             )
 
             # Log waypoints
@@ -440,7 +441,7 @@ class EmbodiedNavigationSystem:
     async def _process_frame_offline(self, frame, frame_idx: int, total_frames: int):
         """Process a single frame in offline mode."""
         # Letterbox frame to 640x640 for consistent processing
-        frame, _, _ = letterbox(frame, target_size=(640, 640))
+        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
         image_size = (640, 640)
 
         try:
@@ -455,11 +456,12 @@ class EmbodiedNavigationSystem:
             )
             logger.info(f"Intent: {task_reasoning.intent}")
 
-            # Generate waypoints
+            # Generate waypoints (pass padding info for correct positioning)
             waypoint_result = await self.waypoint_generator.generate(
                 image_size=image_size,
                 scene_analysis=scene_analysis,
                 task_reasoning=task_reasoning,
+                pad_h=pad_h,
             )
 
             # Log waypoints
