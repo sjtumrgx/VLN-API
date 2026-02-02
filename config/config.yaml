@@ -2,20 +2,39 @@
 
 # API Configuration
 api:
-  # API format: "gemini" or "openai"
-  format: "openai"
+  # Default profile to use (can be overridden with --profile CLI argument)
+  default_profile: "dev"
 
-  # Gemini native API settings
-  gemini:
-    base_url: "http://38.207.171.242:8317"
-    model: "gemini-2.5-flash"
-    api_key: ""  # Set via environment variable GEMINI_API_KEY
+  # API Profiles - define multiple configurations and switch between them
+  profiles:
+    - name: "CLIProxyAPI"
+      base_url: "http://38.207.171.242:8317"
+      api_key: "sk-MteZ7pgKydkajtsPKJcIuZpvL6niVZcMXi71R0ASrgRF6"
+      model: "gemini-2.5-flash"
+      format: "gemini"
 
-  # OpenAI compatible API settings
-  openai:
-    base_url: "http://38.207.171.242:8317"
-    model: "gemini-2.5-flash"
-    api_key: ""  # Set via environment variable OPENAI_API_KEY
+    - name: "CPASS-WARP"
+      base_url: "https://www.cpass.cc"
+      api_key: "sk-AHHLvs7fwksJD3POLYzcNXWq8dzrVIXSgE28wcA6yO1YgPRe"
+      model: "gemini-3-pro-preview"
+      format: "openai"
+
+    - name: "Doro"
+      base_url: "https://us.doro.lol"
+      api_key: "sk-ijAm8ggmydGdlAptO2QzFxdcnQlcyFPsDAVuxqMk74Q8zvuI"
+      model: "gemini-3-flash-preview"
+      format: "gemini"
+
+  # Legacy format (for backward compatibility, used if profiles is empty)
+  # format: "openai"
+  # gemini:
+  #   base_url: "http://38.207.171.242:8317"
+  #   model: "gemini-2.5-flash"
+  #   api_key: ""
+  # openai:
+  #   base_url: "http://38.207.171.242:8317"
+  #   model: "gemini-2.5-flash"
+  #   api_key: ""
 
 # Video capture settings
 video:

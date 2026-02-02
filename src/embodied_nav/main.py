@@ -4,11 +4,23 @@ import asyncio
 import logging
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import cv2
 import yaml
+
+
+@dataclass
+class Profile:
+    """API configuration profile."""
+
+    name: str
+    base_url: str
+    api_key: str
+    model: str
+    format: str  # "gemini" or "openai"
 
 from .llm_client import GeminiNativeClient, OpenAICompatibleClient
 from .scene_analysis import SceneAnalyzer
@@ -27,7 +39,8 @@ class EmbodiedNavigationSystem:
         self,
         config_path: Optional[str] = None,
         source: Optional[str] = None,
-        api_format: str = "gemini",
+        profile: Optional[str] = None,
+        api_format: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         goal: str = "Navigate forward safely",
@@ -40,9 +53,10 @@ class EmbodiedNavigationSystem:
         Args:
             config_path: Path to config file
             source: Video source (camera index or file path)
-            api_format: API format ("gemini" or "openai")
-            api_key: API key (overrides config)
-            model: Model name (overrides config)
+            profile: API profile name to use (from config file)
+            api_format: API format ("gemini" or "openai"), overrides profile
+            api_key: API key (overrides profile)
+            model: Model name (overrides profile)
             goal: Navigation goal
             task: Custom task instruction (overrides goal)
             offline: Enable offline video processing mode
@@ -57,15 +71,25 @@ class EmbodiedNavigationSystem:
         # Load config
         self.config = self._load_config(config_path)
 
-        # Override config with arguments
+        # Load and select profile
+        profiles = self._load_profiles()
+        selected_profile = self._get_profile(profile, profiles)
+        logger.info(f"Using API profile: {selected_profile.name}")
+
+        # Apply CLI overrides to profile
+        if api_format:
+            selected_profile.format = api_format
+        if api_key:
+            selected_profile.api_key = api_key
+        if model:
+            selected_profile.model = model
+
+        # Store resolved profile for component initialization
+        self._active_profile = selected_profile
+
+        # Override video source if provided
         if source is not None:
             self.config["video"]["source"] = source
-        if api_format:
-            self.config["api"]["format"] = api_format
-        if api_key:
-            self.config["api"][api_format]["api_key"] = api_key
-        if model:
-            self.config["api"][api_format]["model"] = model
 
         # Auto-detect offline mode for video files
         source_val = self.config["video"]["source"]
@@ -81,6 +105,17 @@ class EmbodiedNavigationSystem:
         """Load configuration from file."""
         default_config = {
             "api": {
+                "default_profile": "default",
+                "profiles": [
+                    {
+                        "name": "default",
+                        "base_url": "http://38.207.171.242:8317",
+                        "api_key": "",
+                        "model": "gemini-3-flash-preview",
+                        "format": "gemini",
+                    },
+                ],
+                # Legacy format support (for backward compatibility)
                 "format": "gemini",
                 "gemini": {
                     "base_url": "http://38.207.171.242:8317",
@@ -129,6 +164,90 @@ class EmbodiedNavigationSystem:
             else:
                 base[key] = value
 
+    def _load_profiles(self) -> List[Profile]:
+        """Parse profiles from config, supporting both new and legacy formats."""
+        api_config = self.config["api"]
+
+        # Check if new profiles format exists
+        if "profiles" in api_config and api_config["profiles"]:
+            profiles = []
+            for i, p in enumerate(api_config["profiles"]):
+                # Validate required fields
+                required_fields = ["name", "base_url", "api_key", "model", "format"]
+                missing = [f for f in required_fields if f not in p or p[f] is None]
+                if missing:
+                    raise ValueError(
+                        f"Profile at index {i} is missing required fields: {', '.join(missing)}"
+                    )
+                if p["format"] not in ("gemini", "openai"):
+                    raise ValueError(
+                        f"Profile '{p['name']}' has invalid format '{p['format']}'. Must be 'gemini' or 'openai'."
+                    )
+                profiles.append(Profile(
+                    name=p["name"],
+                    base_url=p["base_url"],
+                    api_key=p["api_key"],
+                    model=p["model"],
+                    format=p["format"],
+                ))
+            return profiles
+
+        # Legacy format: convert gemini/openai sections to implicit profiles
+        profiles = []
+        if "gemini" in api_config:
+            g = api_config["gemini"]
+            profiles.append(Profile(
+                name="gemini",
+                base_url=g.get("base_url", ""),
+                api_key=g.get("api_key", ""),
+                model=g.get("model", ""),
+                format="gemini",
+            ))
+        if "openai" in api_config:
+            o = api_config["openai"]
+            profiles.append(Profile(
+                name="openai",
+                base_url=o.get("base_url", ""),
+                api_key=o.get("api_key", ""),
+                model=o.get("model", ""),
+                format="openai",
+            ))
+        return profiles
+
+    def _get_profile(self, profile_name: Optional[str], profiles: List[Profile]) -> Profile:
+        """Select profile by name with error handling.
+
+        Args:
+            profile_name: Name of profile to select, or None for default
+            profiles: List of available profiles
+
+        Returns:
+            Selected Profile
+
+        Raises:
+            ValueError: If profile not found
+        """
+        if not profiles:
+            raise ValueError("No profiles configured")
+
+        # Use default profile if none specified
+        if profile_name is None:
+            profile_name = self.config["api"].get("default_profile")
+            # For legacy config, use the format as profile name
+            if profile_name is None:
+                profile_name = self.config["api"].get("format", "gemini")
+
+        # Find profile by name
+        for profile in profiles:
+            if profile.name == profile_name:
+                return profile
+
+        # Profile not found - raise error with available names
+        available = [p.name for p in profiles]
+        raise ValueError(
+            f"Profile '{profile_name}' not found. Available profiles: {', '.join(available)}"
+        )
+
     def _init_components(self):
         """Initialize all components."""
         # Video capture
@@ -145,21 +264,20 @@ class EmbodiedNavigationSystem:
             reconnect_delay=video_config["reconnect_delay"],
         )
 
-        # LLM client
-        api_format = self.config["api"]["format"]
-        api_config = self.config["api"][api_format]
+        # LLM client - use resolved profile
+        profile = self._active_profile
 
-        if api_format == "gemini":
+        if profile.format == "gemini":
             self.llm_client = GeminiNativeClient(
-                base_url=api_config["base_url"],
-                api_key=api_config["api_key"],
-                model=api_config["model"],
+                base_url=profile.base_url,
+                api_key=profile.api_key,
+                model=profile.model,
             )
         else:
             self.llm_client = OpenAICompatibleClient(
-                base_url=api_config["base_url"],
-                api_key=api_config["api_key"],
-                model=api_config["model"],
+                base_url=profile.base_url,
+                api_key=profile.api_key,
+                model=profile.model,
             )
 
         # Scene analyzer
@@ -417,11 +535,16 @@ def main():
         help="Video source (camera index or file path)",
     )
     parser.add_argument(
+        "--profile", "-p",
+        type=str,
+        help="API profile name to use (from config file)",
+    )
+    parser.add_argument(
         "--api-format", "-f",
         type=str,
         choices=["gemini", "openai"],
-        default="gemini",
-        help="API format to use",
+        default=None,
+        help="API format to use (overrides profile)",
     )
     parser.add_argument(
         "--api-key", "-k",
@@ -471,6 +594,7 @@ def main():
     system = EmbodiedNavigationSystem(
         config_path=args.config,
         source=args.source,
+        profile=args.profile,
         api_format=args.api_format,
         api_key=args.api_key,
         model=args.model,
