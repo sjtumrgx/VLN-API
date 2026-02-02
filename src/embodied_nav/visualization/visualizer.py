@@ -20,6 +20,8 @@ class Visualizer:
         show_coordinates: bool = True,
         near_color: Tuple[int, int, int] = (0, 255, 0),  # Green (BGR)
         far_color: Tuple[int, int, int] = (0, 0, 255),   # Red (BGR)
+        left_box_width: float = 0.22,
+        right_box_width: float = 0.22,
     ):
         """Initialize visualizer.
 
@@ -28,11 +30,15 @@ class Visualizer:
             show_coordinates: Whether to show waypoint coordinates
             near_color: Color for near waypoints (BGR)
             far_color: Color for far waypoints (BGR)
+            left_box_width: Width of left info boxes (0-1, fraction of image width)
+            right_box_width: Width of right task box (0-1, fraction of image width)
         """
         self.window_name = window_name
         self.show_coordinates = show_coordinates
         self.near_color = near_color
         self.far_color = far_color
+        self.left_box_width = max(0.0, min(1.0, left_box_width))
+        self.right_box_width = max(0.0, min(1.0, right_box_width))
         self._window_created = False
 
     def _ensure_window(self, frame: np.ndarray = None):
@@ -56,6 +62,7 @@ class Visualizer:
         linear_velocity: float = 0.0,
         angular_velocity: float = 0.0,
         pad_h: int = 0,
+        user_task: str = "",
     ) -> np.ndarray:
         """Render visualization on frame.
 
@@ -69,6 +76,7 @@ class Visualizer:
             linear_velocity: Linear velocity in m/s
             angular_velocity: Angular velocity in rad/s
             pad_h: Vertical padding from letterbox (for aligning overlays)
+            user_task: User-defined task (will be displayed in top-right)
 
         Returns:
             Annotated frame
@@ -76,8 +84,12 @@ class Visualizer:
         # Make a copy to avoid modifying original
         vis_frame = frame.copy()
 
-        # Draw text overlay
+        # Draw text overlay (left side)
         vis_frame = self._draw_text_overlay(vis_frame, scene_summary, task_understanding, intent, pad_h)
+
+        # Draw user task (right side)
+        if user_task:
+            vis_frame = self._draw_task_box(vis_frame, user_task, pad_h)
 
         # Draw waypoints and curve
         if waypoints:
@@ -127,7 +139,7 @@ class Visualizer:
         scale = self._get_scale_factor(frame)
 
         # Box parameters
-        box_width = int(width * 0.22)
+        box_width = int(width * self.left_box_width)
         margin = int(8 * scale)
         padding = int(6 * scale)
         corner_radius = int(8 * scale)
@@ -182,6 +194,60 @@ class Visualizer:
                 cv2.putText(frame, line, (x1 + padding, text_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
 
             current_y = y2 + margin
+
+        return frame
+
+    def _draw_task_box(
+        self,
+        frame: np.ndarray,
+        user_task: str,
+        pad_h: int = 0,
+    ) -> np.ndarray:
+        """Draw user task box in top-right corner."""
+        height, width = frame.shape[:2]
+        scale = self._get_scale_factor(frame)
+
+        # Box parameters
+        box_width = int(width * self.right_box_width)
+        margin = int(8 * scale)
+        padding = int(6 * scale)
+        corner_radius = int(8 * scale)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.38 * scale
+        thickness = max(1, int(scale))
+        line_height = int(16 * scale)
+
+        # Color (BGR) - purple/magenta theme for user task
+        bg_color = (140, 60, 140)      # Dark purple
+        text_color = (255, 180, 255)   # Light pink/magenta
+
+        # Wrap text to fit box width
+        wrapped_lines = self._wrap_text(user_task, font, font_scale, thickness, box_width - padding * 2)
+
+        # Calculate box height based on content
+        num_lines = len(wrapped_lines) + 1  # +1 for label
+        box_height = padding * 2 + num_lines * line_height
+
+        # Position in top-right corner
+        x1 = width - margin - box_width
+        y1 = pad_h + margin
+        x2 = width - margin
+        y2 = y1 + box_height
+
+        # Draw rounded rectangle background
+        overlay = frame.copy()
+        self._draw_rounded_rect(overlay, (x1, y1), (x2, y2), bg_color, corner_radius)
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+        # Draw label
+        label = "User Task"
+        label_y = y1 + padding + line_height - int(4 * scale)
+        cv2.putText(frame, label, (x1 + padding, label_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+        # Draw wrapped content
+        for i, line in enumerate(wrapped_lines):
+            text_y = label_y + (i + 1) * line_height
+            cv2.putText(frame, line, (x1 + padding, text_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
 
         return frame
 

@@ -24,6 +24,7 @@ class UnifiedAnalysisResult:
     waypoints: List[Waypoint]
     linear_velocity: float = 0.0  # m/s
     angular_velocity: float = 0.0  # rad/s
+    task_english: str = ""  # User task translated to English
     raw_response: str = ""
 
 
@@ -37,14 +38,16 @@ Waypoints MUST land on walkable ground or the target object, NOT on obstacles.
 Output JSON (ALL text in English only):
 ```json
 {{
+  "task_en": "user task translated to English",
   "scene": "brief scene description",
   "task": "target location and situation",
   "intent": "forward/left/right/approach",
   "waypoints": [x2, x3, x4, x5],
-  "v": 0.5,
-  "w": 0.0
+  "v":  "Give an estimate of linear velocity (0.0-1.0 m/s)",
+  "w": "Give an estimate of angular velocity (-1.0 to 1.0 rad/s, positive=left)"
 }}
 ```
+task_en: translate the user task to English (keep original if already English)
 v: linear velocity (0.0-1.0 m/s), w: angular velocity (-1.0 to 1.0 rad/s, positive=left)"""
 
 UNIFIED_SYSTEM_PROMPT = """Robot navigation system. Origin top-left, x right, y down. Output JSON only. All text must be in English."""
@@ -133,6 +136,7 @@ class UnifiedAnalyzer:
         intent = "continue forward"
         linear_velocity = 0.0
         angular_velocity = 0.0
+        task_english = ""
         waypoints = []
 
         center_x = image_width // 2
@@ -141,6 +145,7 @@ class UnifiedAnalyzer:
             json_str = self._extract_json(text)
             data = json.loads(json_str)
 
+            task_english = data.get("task_en", "")
             scene_summary = data.get("scene", "")
             task_understanding = data.get("task", "")
             intent = data.get("intent", "continue forward")
@@ -191,6 +196,7 @@ class UnifiedAnalyzer:
             waypoints=waypoints,
             linear_velocity=linear_velocity,
             angular_velocity=angular_velocity,
+            task_english=task_english,
             raw_response=text,
         )
 

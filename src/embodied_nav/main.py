@@ -325,12 +325,17 @@ class EmbodiedNavigationSystem:
             show_coordinates=vis_config["show_coordinates"],
             near_color=tuple(vis_config["near_color"]),
             far_color=tuple(vis_config["far_color"]),
+            left_box_width=vis_config.get("left_box_width", 0.22),
+            right_box_width=vis_config.get("right_box_width", 0.22),
         )
 
         # Image processing settings
         image_config = self.config.get("image", {})
         target_size = image_config.get("target_size", [640, 640])
         self.target_size = tuple(target_size)
+
+        # Translated user task (will be set after first API call)
+        self.user_task_english = None
 
     async def run(self):
         """Run the main navigation loop."""
@@ -496,6 +501,10 @@ class EmbodiedNavigationSystem:
             self.visualizer.log_waypoints(result.waypoints)
 
             # Render visualization
+            # Update translated task if available
+            if result.task_english and not self.user_task_english:
+                self.user_task_english = result.task_english
+
             vis_frame = self.visualizer.render(
                 frame,
                 scene_summary=result.scene_summary,
@@ -506,6 +515,7 @@ class EmbodiedNavigationSystem:
                 linear_velocity=result.linear_velocity,
                 angular_velocity=result.angular_velocity,
                 pad_h=pad_h,
+                user_task=self.user_task_english or result.task_english,
             )
 
         except Exception as e:
@@ -539,6 +549,10 @@ class EmbodiedNavigationSystem:
             self.visualizer.log_waypoints(result.waypoints)
 
             # Render visualization
+            # Update translated task if available
+            if result.task_english and not self.user_task_english:
+                self.user_task_english = result.task_english
+
             vis_frame = self.visualizer.render(
                 frame,
                 scene_summary=result.scene_summary,
@@ -549,6 +563,7 @@ class EmbodiedNavigationSystem:
                 linear_velocity=result.linear_velocity,
                 angular_velocity=result.angular_velocity,
                 pad_h=pad_h,
+                user_task=self.user_task_english or result.task_english,
             )
 
         except Exception as e:
