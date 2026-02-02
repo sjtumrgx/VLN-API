@@ -24,8 +24,7 @@ class Profile:
     model: str
     format: str  # "gemini" or "openai"
 
-from .scene_analysis import SceneAnalyzer
-from .task_reasoning import TaskReasoner
+from .unified_analyzer import UnifiedAnalyzer
 from .video_capture import VideoCapture
 from .visualization import Visualizer
 from .waypoint_generation import WaypointGenerator
@@ -281,15 +280,14 @@ class EmbodiedNavigationSystem:
                 model=profile.model,
             )
 
-        # Scene analyzer
-        self.scene_analyzer = SceneAnalyzer(self.llm_client)
-
-        # Task reasoner
-        self.task_reasoner = TaskReasoner(self.llm_client)
-
-        # Waypoint generator
-        self.waypoint_generator = WaypointGenerator(
+        # Unified analyzer (combines scene analysis, task reasoning, waypoint generation)
+        self.unified_analyzer = UnifiedAnalyzer(
             llm_client=self.llm_client,
+            num_waypoints=self.config["waypoints"]["count"],
+        )
+
+        # Waypoint generator (for smooth curve rendering only)
+        self.waypoint_generator = WaypointGenerator(
             num_waypoints=self.config["waypoints"]["count"],
         )
 
@@ -393,37 +391,27 @@ class EmbodiedNavigationSystem:
 
         # Letterbox frame to 640x640 for consistent processing
         frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
-        image_size = (640, 640)
 
         try:
-            # Run scene analysis
-            scene_analysis = await self.scene_analyzer.analyze(frame)
-            logger.debug(f"Scene: {scene_analysis.summary}")
-
-            # Run task reasoning
-            task_reasoning = await self.task_reasoner.reason(
-                scene_analysis,
-                goal=self.goal,
-            )
-            logger.debug(f"Intent: {task_reasoning.intent}")
-
-            # Generate waypoints (pass padding info for correct positioning)
-            waypoint_result = await self.waypoint_generator.generate(
-                image_size=image_size,
-                scene_analysis=scene_analysis,
-                task_reasoning=task_reasoning,
+            # Run unified analysis (single API call)
+            result = await self.unified_analyzer.analyze(
+                frame=frame,
+                task=self.goal,
                 pad_h=pad_h,
             )
 
+            logger.debug(f"Scene: {result.scene_analysis.summary}")
+            logger.debug(f"Intent: {result.task_reasoning.intent}")
+
             # Log waypoints
-            self.visualizer.log_waypoints(waypoint_result.waypoints)
+            self.visualizer.log_waypoints(result.waypoints)
 
             # Render visualization
             vis_frame = self.visualizer.render(
                 frame,
-                scene_analysis=scene_analysis,
-                task_reasoning=task_reasoning,
-                waypoints=waypoint_result.waypoints,
+                scene_analysis=result.scene_analysis,
+                task_reasoning=result.task_reasoning,
+                waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
             )
 
@@ -442,37 +430,27 @@ class EmbodiedNavigationSystem:
         """Process a single frame in offline mode."""
         # Letterbox frame to 640x640 for consistent processing
         frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
-        image_size = (640, 640)
 
         try:
-            # Run scene analysis
-            scene_analysis = await self.scene_analyzer.analyze(frame)
-            logger.info(f"Scene: {scene_analysis.summary}")
-
-            # Run task reasoning
-            task_reasoning = await self.task_reasoner.reason(
-                scene_analysis,
-                goal=self.goal,
-            )
-            logger.info(f"Intent: {task_reasoning.intent}")
-
-            # Generate waypoints (pass padding info for correct positioning)
-            waypoint_result = await self.waypoint_generator.generate(
-                image_size=image_size,
-                scene_analysis=scene_analysis,
-                task_reasoning=task_reasoning,
+            # Run unified analysis (single API call)
+            result = await self.unified_analyzer.analyze(
+                frame=frame,
+                task=self.goal,
                 pad_h=pad_h,
             )
 
+            logger.info(f"Scene: {result.scene_analysis.summary}")
+            logger.info(f"Intent: {result.task_reasoning.intent}")
+
             # Log waypoints
-            self.visualizer.log_waypoints(waypoint_result.waypoints)
+            self.visualizer.log_waypoints(result.waypoints)
 
             # Render visualization
             vis_frame = self.visualizer.render(
                 frame,
-                scene_analysis=scene_analysis,
-                task_reasoning=task_reasoning,
-                waypoints=waypoint_result.waypoints,
+                scene_analysis=result.scene_analysis,
+                task_reasoning=result.task_reasoning,
+                waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
             )
 
