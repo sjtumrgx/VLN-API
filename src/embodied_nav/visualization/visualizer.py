@@ -6,8 +6,6 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from ..scene_analysis import SceneAnalysisResult, BoundingBox
-from ..task_reasoning import TaskReasoningResult
 from ..waypoint_generation import Waypoint, WaypointGenerator
 
 logger = logging.getLogger(__name__)
@@ -46,8 +44,9 @@ class Visualizer:
     def render(
         self,
         frame: np.ndarray,
-        scene_analysis: Optional[SceneAnalysisResult] = None,
-        task_reasoning: Optional[TaskReasoningResult] = None,
+        scene_summary: str = "",
+        task_understanding: str = "",
+        intent: str = "",
         waypoints: Optional[List[Waypoint]] = None,
         waypoint_generator: Optional[WaypointGenerator] = None,
     ) -> np.ndarray:
@@ -55,8 +54,9 @@ class Visualizer:
 
         Args:
             frame: Input frame (BGR)
-            scene_analysis: Scene analysis result
-            task_reasoning: Task reasoning result
+            scene_summary: Brief scene description
+            task_understanding: Task understanding text
+            intent: Navigation intent
             waypoints: List of waypoints
             waypoint_generator: Generator for smooth curve
 
@@ -66,13 +66,8 @@ class Visualizer:
         # Make a copy to avoid modifying original
         vis_frame = frame.copy()
 
-        # Draw scene analysis annotations
-        if scene_analysis:
-            vis_frame = self._draw_scene_analysis(vis_frame, scene_analysis)
-
-        # Draw task reasoning overlay
-        if task_reasoning:
-            vis_frame = self._draw_task_reasoning(vis_frame, task_reasoning)
+        # Draw text overlay
+        vis_frame = self._draw_text_overlay(vis_frame, scene_summary, task_understanding, intent)
 
         # Draw waypoints and curve
         if waypoints:
@@ -99,87 +94,14 @@ class Visualizer:
             cv2.destroyWindow(self.window_name)
             self._window_created = False
 
-    def _draw_scene_analysis(
+    def _draw_text_overlay(
         self,
         frame: np.ndarray,
-        scene_analysis: SceneAnalysisResult,
+        scene_summary: str,
+        task_understanding: str,
+        intent: str,
     ) -> np.ndarray:
-        """Draw scene analysis annotations."""
-        # Draw objects (blue boxes)
-        for obj in scene_analysis.objects:
-            self._draw_bbox(
-                frame,
-                obj.bbox,
-                color=(255, 200, 0),  # Light blue
-                label=obj.label,
-            )
-
-        # Draw obstacles (red boxes)
-        for obs in scene_analysis.obstacles:
-            self._draw_bbox(
-                frame,
-                obs.bbox,
-                color=(0, 0, 255),  # Red
-                label=f"[!] {obs.label}",
-            )
-
-        # Draw traversable regions (green boxes, semi-transparent)
-        for region in scene_analysis.traversable_regions:
-            self._draw_bbox(
-                frame,
-                region.bbox,
-                color=(0, 255, 0),  # Green
-                label=region.description,
-                thickness=1,
-            )
-
-        return frame
-
-    def _draw_bbox(
-        self,
-        frame: np.ndarray,
-        bbox: BoundingBox,
-        color: Tuple[int, int, int],
-        label: str = "",
-        thickness: int = 2,
-    ):
-        """Draw a bounding box with label."""
-        x, y, w, h = bbox.x, bbox.y, bbox.width, bbox.height
-
-        # Draw rectangle
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, thickness)
-
-        # Draw label background
-        if label:
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, 1)
-
-            cv2.rectangle(
-                frame,
-                (x, y - text_h - 6),
-                (x + text_w + 4, y),
-                color,
-                -1,
-            )
-
-            # Draw label text
-            cv2.putText(
-                frame,
-                label,
-                (x + 2, y - 4),
-                font,
-                font_scale,
-                (255, 255, 255),
-                1,
-            )
-
-    def _draw_task_reasoning(
-        self,
-        frame: np.ndarray,
-        task_reasoning: TaskReasoningResult,
-    ) -> np.ndarray:
-        """Draw task reasoning overlay."""
+        """Draw text overlay with scene and task info."""
         height, width = frame.shape[:2]
 
         # Create semi-transparent overlay for text background
@@ -192,23 +114,23 @@ class Visualizer:
 
         # Draw text
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
+        font_scale = 0.45
         color = (255, 255, 255)
 
+        # Scene summary
+        if scene_summary:
+            text = f"Scene: {scene_summary[:70]}"
+            cv2.putText(frame, text, (10, 22), font, font_scale, color, 1)
+
         # Task understanding
-        if task_reasoning.task_understanding:
-            text = f"Scene: {task_reasoning.task_understanding[:60]}"
-            cv2.putText(frame, text, (10, 25), font, font_scale, color, 1)
+        if task_understanding:
+            text = f"Task: {task_understanding[:70]}"
+            cv2.putText(frame, text, (10, 47), font, font_scale, (0, 255, 255), 1)
 
         # Intent
-        if task_reasoning.intent:
-            text = f"Intent: {task_reasoning.intent[:60]}"
-            cv2.putText(frame, text, (10, 50), font, font_scale, (0, 255, 255), 1)
-
-        # Reasoning
-        if task_reasoning.reasoning:
-            text = f"Reason: {task_reasoning.reasoning[:60]}"
-            cv2.putText(frame, text, (10, 75), font, font_scale, color, 1)
+        if intent:
+            text = f"Intent: {intent[:70]}"
+            cv2.putText(frame, text, (10, 72), font, font_scale, (0, 255, 0), 1)
 
         return frame
 

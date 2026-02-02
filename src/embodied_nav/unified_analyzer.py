@@ -3,15 +3,13 @@
 import json
 import logging
 import re
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional
 
 import numpy as np
 
 from .llm_client import BaseLLMClient, encode_image_to_base64
-from .scene_analysis import BoundingBox, DetectedObject, Obstacle, TraversableRegion, SceneAnalysisResult
-from .task_reasoning import TaskReasoningResult
-from .waypoint_generation import Waypoint, WaypointGenerationResult
+from .waypoint_generation import Waypoint
 
 logger = logging.getLogger(__name__)
 
@@ -19,61 +17,53 @@ logger = logging.getLogger(__name__)
 @dataclass
 class UnifiedAnalysisResult:
     """Combined result of scene analysis, task reasoning, and waypoint generation."""
-    scene_analysis: SceneAnalysisResult
-    task_reasoning: TaskReasoningResult
+    scene_summary: str
+    task_understanding: str
+    intent: str
+    reasoning: str
     waypoints: List[Waypoint]
     raw_response: str = ""
 
 
-UNIFIED_PROMPT = """Analyze this 640x640 image for robot navigation with the following task:
+UNIFIED_PROMPT = """Analyze this image for robot navigation.
 
 **Task:** {task}
 
-**Coordinate system:** Origin (0,0) at TOP-LEFT corner. X increases RIGHT, Y increases DOWN.
+**Coordinate system:** Origin (0,0) at TOP-LEFT. X increases RIGHT, Y increases DOWN.
 
 **Waypoint y-coordinates (FIXED):**
-- Waypoint 1: y={y1} (bottom, nearest)
-- Waypoint 2: y={y2}
-- Waypoint 3: y={y3}
-- Waypoint 4: y={y4}
-- Waypoint 5: y={y5} (top, farthest)
+- Point 1: y={y1} (nearest)
+- Point 2: y={y2}
+- Point 3: y={y3}
+- Point 4: y={y4}
+- Point 5: y={y5} (farthest)
 
-**IMPORTANT:** Only detect and mark objects that are DIRECTLY RELEVANT to the task!
-- If task is "find red trash bin", only mark red trash bins and obstacles blocking the path to it
-- If task is "go to the door", only mark doors and obstacles in the way
-- Do NOT mark irrelevant objects (furniture, decorations, etc. that don't affect the task)
-- Focus attention on the TASK TARGET and PATH OBSTACLES only
+Analyze the scene and provide:
+1. Brief scene description (what's relevant to the task)
+2. Task understanding (where is the target, current situation)
+3. Navigation intent (what action to take)
+4. 5 waypoint x-coordinates to guide the robot
 
-Output JSON:
+Output JSON only:
 ```json
 {{
-  "target_objects": [
-    {{"label": "task-relevant object", "bbox": {{"x": 0, "y": 0, "width": 100, "height": 100}}, "is_target": true}}
-  ],
-  "obstacles": [
-    {{"label": "obstacle blocking path", "bbox": {{"x": 0, "y": 0, "width": 100, "height": 100}}}}
-  ],
-  "traversable_path": {{
-    "description": "clear path description",
-    "bbox": {{"x": 0, "y": 0, "width": 100, "height": 100}}
-  }},
-  "scene_summary": "Brief description focusing on task target location",
-  "task_understanding": "Current situation relative to task",
-  "intent": "Action to take (move forward, turn left/right, approach target, etc.)",
-  "reasoning": "Why this action helps complete the task",
-  "waypoint_x_positions": [x2, x3, x4, x5]
+  "scene": "Brief scene description relevant to task",
+  "task_understanding": "Target location and current situation",
+  "intent": "Action: move forward / turn left / turn right / approach target",
+  "reasoning": "Why this action",
+  "waypoints": [x1, x2, x3, x4, x5]
 }}
 ```
 
-- waypoint_x_positions: x-coordinates for waypoints 2-5 (waypoint 1 is at x=320)
-- x values should be 0-640, guiding robot toward the task target while avoiding obstacles
-- Keep response concise. Only mark what's essential for the task."""
+- waypoints: x-coordinates (0-640) for all 5 points
+- Point 1 starts near bottom center (around x=320)
+- Guide path toward task target while avoiding obstacles
+- Keep response concise."""
 
-UNIFIED_SYSTEM_PROMPT = """You are a focused robot navigation system.
-Given an image and a specific task, analyze ONLY what's relevant to completing that task.
-Do NOT detect or mark objects unrelated to the task.
-Coordinate system: origin at top-left, x increases rightward, y increases downward.
-Output valid JSON with task-focused analysis and navigation waypoints."""
+UNIFIED_SYSTEM_PROMPT = """You are a robot navigation system.
+Analyze the image, understand the task, and output navigation waypoints.
+Coordinate: origin top-left, x right, y down. Image is 640x640.
+Output valid JSON only."""
 
 
 class UnifiedAnalyzer:
@@ -103,7 +93,7 @@ class UnifiedAnalyzer:
             pad_h: Vertical padding from letterbox
 
         Returns:
-            UnifiedAnalysisResult with scene analysis, task reasoning, and waypoints
+            UnifiedAnalysisResult with analysis and waypoints
         """
         # Calculate waypoint y-positions
         y_positions = self._calculate_vertical_positions(640, pad_h)
@@ -147,83 +137,45 @@ class UnifiedAnalyzer:
         self, text: str, y_positions: List[int]
     ) -> UnifiedAnalysisResult:
         """Parse LLM response into unified result."""
-        # Initialize default results
-        scene_analysis = SceneAnalysisResult(raw_response=text)
-        task_reasoning = TaskReasoningResult(raw_response=text)
+        # Default values
+        scene_summary = ""
+        task_understanding = ""
+        intent = "continue forward"
+        reasoning = ""
         waypoints = []
 
         try:
             json_str = self._extract_json(text)
             data = json.loads(json_str)
 
-            # Parse target objects (task-relevant)
-            for obj in data.get("target_objects", []):
-                try:
-                    bbox = self._parse_bbox(obj.get("bbox", {}))
-                    scene_analysis.objects.append(DetectedObject(
-                        label=obj.get("label", "unknown"),
-                        bbox=bbox,
-                        confidence=1.0 if obj.get("is_target") else 0.8,
-                    ))
-                except (KeyError, TypeError) as e:
-                    logger.warning(f"Failed to parse target object: {e}")
-
-            # Parse obstacles
-            for obs in data.get("obstacles", []):
-                try:
-                    bbox = self._parse_bbox(obs.get("bbox", {}))
-                    scene_analysis.obstacles.append(Obstacle(
-                        label=obs.get("label", "unknown"),
-                        bbox=bbox,
-                    ))
-                except (KeyError, TypeError) as e:
-                    logger.warning(f"Failed to parse obstacle: {e}")
-
-            # Parse traversable path
-            if "traversable_path" in data and data["traversable_path"]:
-                try:
-                    path = data["traversable_path"]
-                    bbox = self._parse_bbox(path.get("bbox", {}))
-                    scene_analysis.traversable_regions.append(TraversableRegion(
-                        description=path.get("description", ""),
-                        bbox=bbox,
-                    ))
-                except (KeyError, TypeError) as e:
-                    logger.warning(f"Failed to parse traversable path: {e}")
-
-            # Parse scene summary
-            scene_analysis.summary = data.get("scene_summary", "")
-
-            # Parse task reasoning
-            task_reasoning.task_understanding = data.get("task_understanding", "")
-            task_reasoning.intent = data.get("intent", "")
-            task_reasoning.reasoning = data.get("reasoning", "")
+            scene_summary = data.get("scene", "")
+            task_understanding = data.get("task_understanding", "")
+            intent = data.get("intent", "continue forward")
+            reasoning = data.get("reasoning", "")
 
             # Parse waypoints
-            center_x = 320
-            x_positions = [center_x]
-            llm_x_positions = data.get("waypoint_x_positions", [])
+            x_positions = data.get("waypoints", [])
 
-            if len(llm_x_positions) >= self.num_waypoints - 1:
-                x_positions.extend([
-                    max(0, min(640, int(x)))
-                    for x in llm_x_positions[:self.num_waypoints - 1]
-                ])
+            if len(x_positions) >= self.num_waypoints:
+                # Use provided x-coordinates
+                for i in range(self.num_waypoints):
+                    waypoints.append(Waypoint(
+                        index=i + 1,
+                        x=max(0, min(640, int(x_positions[i]))),
+                        y=int(y_positions[i]),
+                    ))
             else:
                 # Fallback to center
-                x_positions.extend([center_x] * (self.num_waypoints - 1))
-
-            for i in range(self.num_waypoints):
-                waypoints.append(Waypoint(
-                    index=i + 1,
-                    x=int(x_positions[i]),
-                    y=int(y_positions[i]),
-                ))
+                for i in range(self.num_waypoints):
+                    waypoints.append(Waypoint(
+                        index=i + 1,
+                        x=320,
+                        y=int(y_positions[i]),
+                    ))
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {e}")
-            scene_analysis.summary = "Failed to parse response"
-            task_reasoning.intent = "continue forward"
+            scene_summary = "Failed to parse response"
             # Fallback waypoints
             for i in range(self.num_waypoints):
                 waypoints.append(Waypoint(
@@ -233,8 +185,10 @@ class UnifiedAnalyzer:
                 ))
 
         return UnifiedAnalysisResult(
-            scene_analysis=scene_analysis,
-            task_reasoning=task_reasoning,
+            scene_summary=scene_summary,
+            task_understanding=task_understanding,
+            intent=intent,
+            reasoning=reasoning,
             waypoints=waypoints,
             raw_response=text,
         )
@@ -248,12 +202,3 @@ class UnifiedAnalyzer:
         if match:
             return match.group(0)
         return text
-
-    def _parse_bbox(self, bbox_data: dict) -> BoundingBox:
-        """Parse bounding box from dict."""
-        return BoundingBox(
-            x=int(bbox_data.get("x", 0)),
-            y=int(bbox_data.get("y", 0)),
-            width=int(bbox_data.get("width", 0)),
-            height=int(bbox_data.get("height", 0)),
-        )

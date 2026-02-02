@@ -400,8 +400,8 @@ class EmbodiedNavigationSystem:
                 pad_h=pad_h,
             )
 
-            logger.debug(f"Scene: {result.scene_analysis.summary}")
-            logger.debug(f"Intent: {result.task_reasoning.intent}")
+            logger.debug(f"Scene: {result.scene_summary}")
+            logger.debug(f"Intent: {result.intent}")
 
             # Log waypoints
             self.visualizer.log_waypoints(result.waypoints)
@@ -409,8 +409,9 @@ class EmbodiedNavigationSystem:
             # Render visualization
             vis_frame = self.visualizer.render(
                 frame,
-                scene_analysis=result.scene_analysis,
-                task_reasoning=result.task_reasoning,
+                scene_summary=result.scene_summary,
+                task_understanding=result.task_understanding,
+                intent=result.intent,
                 waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
             )
@@ -439,8 +440,8 @@ class EmbodiedNavigationSystem:
                 pad_h=pad_h,
             )
 
-            logger.info(f"Scene: {result.scene_analysis.summary}")
-            logger.info(f"Intent: {result.task_reasoning.intent}")
+            logger.info(f"Scene: {result.scene_summary}")
+            logger.info(f"Intent: {result.intent}")
 
             # Log waypoints
             self.visualizer.log_waypoints(result.waypoints)
@@ -448,8 +449,9 @@ class EmbodiedNavigationSystem:
             # Render visualization
             vis_frame = self.visualizer.render(
                 frame,
-                scene_analysis=result.scene_analysis,
-                task_reasoning=result.task_reasoning,
+                scene_summary=result.scene_summary,
+                task_understanding=result.task_understanding,
+                intent=result.intent,
                 waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
             )
