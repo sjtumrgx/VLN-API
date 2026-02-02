@@ -1,0 +1,50 @@
+# Embodied Navigation System Configuration
+
+# API Configuration
+api:
+  # API format: "gemini" or "openai"
+  format: "openai"
+
+  # Gemini native API settings
+  gemini:
+    base_url: "http://38.207.171.242:8317"
+    model: "gemini-2.5-flash"
+    api_key: ""  # Set via environment variable GEMINI_API_KEY
+
+  # OpenAI compatible API settings
+  openai:
+    base_url: "http://38.207.171.242:8317"
+    model: "gemini-2.5-flash"
+    api_key: ""  # Set via environment variable OPENAI_API_KEY
+
+# Video capture settings
+video:
+  # Source: camera index (0, 1, ...) or video file path
+  source: 0
+  # Frame queue size (1 = single frame buffer)
+  queue_size: 1
+  # Reconnection attempts on disconnect
+  reconnect_attempts: 3
+  reconnect_delay: 1.0  # seconds
+
+# Waypoint generation settings
+waypoints:
+  # Number of waypoints to generate
+  count: 5
+  # Vertical spacing mode: "equal" or "custom"
+  spacing_mode: "equal"
+
+# Visualization settings
+visualization:
+  # Window name
+  window_name: "Embodied Navigation"
+  # Show coordinate overlay
+  show_coordinates: true
+  # Color gradient: near (green) to far (red)
+  near_color: [0, 255, 0]  # BGR
+  far_color: [0, 0, 255]   # BGR
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
