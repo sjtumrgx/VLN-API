@@ -44,6 +44,11 @@ Analyze the scene and provide:
 3. Navigation intent (what action to take)
 4. x-coordinates for waypoints 2-5 to guide the robot
 
+**CRITICAL:** The 4 waypoints (x2-x5) represent the robot's future footsteps!
+- They MUST land on the GROUND (floor, road, walkable surface) or the FINAL TARGET object
+- They MUST NOT land on walls, furniture, obstacles, or any irrelevant objects
+- Think of them as where the robot will actually step/move to
+
 Output JSON only:
 ```json
 {{
@@ -56,7 +61,7 @@ Output JSON only:
 ```
 
 - waypoints: x-coordinates (0-640) for points 2-5 only (point 1 is fixed at x=320)
-- Guide path toward task target while avoiding obstacles
+- Guide path toward task target on walkable ground
 - Keep response concise."""
 
 UNIFIED_SYSTEM_PROMPT = """You are a robot navigation system.
