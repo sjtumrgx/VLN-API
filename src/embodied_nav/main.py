@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import cv2
+import numpy as np
 import yaml
 
 from .llm_client import GeminiNativeClient, OpenAICompatibleClient, letterbox
@@ -47,6 +48,9 @@ class EmbodiedNavigationSystem:
         task: Optional[str] = None,
         offline: bool = False,
         sample_interval: Optional[int] = None,
+        export: Optional[bool] = None,
+        export_path: Optional[str] = None,
+        export_speed: Optional[float] = None,
     ):
         """Initialize the navigation system.
 
@@ -61,6 +65,9 @@ class EmbodiedNavigationSystem:
             task: Custom task instruction (overrides goal)
             offline: Enable offline video processing mode
             sample_interval: Frame sampling interval (default: auto-detect from FPS)
+            export: Enable video export (overrides config)
+            export_path: Output video path (overrides auto-generated name)
+            export_speed: Playback speed multiplier (overrides config)
         """
         self.goal = task if task else goal
         self.offline_mode = offline
@@ -98,6 +105,16 @@ class EmbodiedNavigationSystem:
                 self.offline_mode = True
                 logger.info(f"Auto-detected video file, enabling offline mode")
 
+        # Video export settings
+        export_config = self.config.get("export", {})
+        self.export_enabled = export if export is not None else export_config.get("enabled", False)
+        self.export_path = export_path
+        self.export_speed = export_speed if export_speed is not None else export_config.get("speed", 1.0)
+        self.export_output_dir = export_config.get("output_dir", "output")
+        self.export_codec = export_config.get("codec", "mp4v")
+        self.export_fps = export_config.get("fps", None)
+        self._video_writer = None
+
         # Initialize components
         self._init_components()
 
@@ -133,6 +150,16 @@ class EmbodiedNavigationSystem:
                 "queue_size": 1,
                 "reconnect_attempts": 3,
                 "reconnect_delay": 1.0,
+            },
+            "image": {
+                "target_size": [640, 640],
+            },
+            "export": {
+                "enabled": False,
+                "output_dir": "output",
+                "speed": 1.0,
+                "codec": "mp4v",
+                "fps": None,
             },
             "waypoints": {
                 "count": 5,
@@ -300,6 +327,11 @@ class EmbodiedNavigationSystem:
             far_color=tuple(vis_config["far_color"]),
         )
 
+        # Image processing settings
+        image_config = self.config.get("image", {})
+        target_size = image_config.get("target_size", [640, 640])
+        self.target_size = tuple(target_size)
+
     async def run(self):
         """Run the main navigation loop."""
         if self.offline_mode:
@@ -352,6 +384,10 @@ class EmbodiedNavigationSystem:
         logger.info(f"Task: {self.goal}")
         logger.info("Press 'q' to quit, any other key to continue to next frame.")
 
+        # Initialize video writer if export is enabled
+        if self.export_enabled:
+            self._init_video_writer(source, fps, sample_interval)
+
         self._running = True
         frame_idx = 0
         processed_count = 0
@@ -377,9 +413,62 @@ class EmbodiedNavigationSystem:
             logger.info("Video processing cancelled")
         finally:
             cap.release()
+            self._close_video_writer()
             await self.shutdown()
 
         logger.info(f"Processed {processed_count} frames from {total_frames} total frames")
+
+    def _init_video_writer(self, source: str, source_fps: float, sample_interval: int):
+        """Initialize video writer for export."""
+        # Determine output path
+        if self.export_path:
+            output_path = self.export_path
+        else:
+            # Auto-generate name: video_name + model + speed
+            source_path = Path(source)
+            video_name = source_path.stem
+            model_name = self._active_profile.model.replace("/", "-").replace(":", "-")
+            speed_str = f"{self.export_speed}x" if self.export_speed != 1.0 else "1x"
+            output_name = f"{video_name}_{model_name}_{speed_str}.mp4"
+
+            # Ensure output directory exists
+            output_dir = Path(self.export_output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = str(output_dir / output_name)
+
+        # Calculate output FPS
+        if self.export_fps:
+            output_fps = self.export_fps
+        else:
+            # Base FPS is source_fps / sample_interval (frames we actually process)
+            # Then multiply by speed
+            base_fps = source_fps / sample_interval
+            output_fps = base_fps * self.export_speed
+
+        # Get frame size from target_size
+        width, height = self.target_size
+
+        # Initialize writer
+        fourcc = cv2.VideoWriter_fourcc(*self.export_codec)
+        self._video_writer = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
+
+        if self._video_writer.isOpened():
+            logger.info(f"Video export enabled: {output_path} (FPS: {output_fps:.1f}, Speed: {self.export_speed}x)")
+        else:
+            logger.error(f"Failed to create video writer: {output_path}")
+            self._video_writer = None
+
+    def _close_video_writer(self):
+        """Close video writer."""
+        if self._video_writer is not None:
+            self._video_writer.release()
+            logger.info("Video export completed")
+            self._video_writer = None
+
+    def _write_frame(self, frame: np.ndarray):
+        """Write frame to video file."""
+        if self._video_writer is not None and self._video_writer.isOpened():
+            self._video_writer.write(frame)
 
     async def _process_frame_realtime(self):
         """Process a single frame in real-time mode."""
@@ -389,8 +478,8 @@ class EmbodiedNavigationSystem:
             await asyncio.sleep(0.1)
             return
 
-        # Letterbox frame to 640x640 for consistent processing
-        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
+        # Letterbox frame for consistent processing
+        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
 
         try:
             # Run unified analysis (single API call)
@@ -414,6 +503,9 @@ class EmbodiedNavigationSystem:
                 intent=result.intent,
                 waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
+                linear_velocity=result.linear_velocity,
+                angular_velocity=result.angular_velocity,
+                pad_h=pad_h,
             )
 
         except Exception as e:
@@ -429,8 +521,8 @@ class EmbodiedNavigationSystem:
 
     async def _process_frame_offline(self, frame, frame_idx: int, total_frames: int):
         """Process a single frame in offline mode."""
-        # Letterbox frame to 640x640 for consistent processing
-        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=(640, 640))
+        # Letterbox frame for consistent processing
+        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
 
         try:
             # Run unified analysis (single API call)
@@ -454,6 +546,9 @@ class EmbodiedNavigationSystem:
                 intent=result.intent,
                 waypoints=result.waypoints,
                 waypoint_generator=self.waypoint_generator,
+                linear_velocity=result.linear_velocity,
+                angular_velocity=result.angular_velocity,
+                pad_h=pad_h,
             )
 
         except Exception as e:
@@ -464,6 +559,9 @@ class EmbodiedNavigationSystem:
         info_text = f"Frame: {frame_idx}/{total_frames}"
         cv2.putText(vis_frame, info_text, (10, vis_frame.shape[0] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Write frame to video if export is enabled
+        self._write_frame(vis_frame)
 
         # Show frame and wait for key
         key = self.visualizer.show(vis_frame)
@@ -565,6 +663,21 @@ def main():
         help="Frame sampling interval for offline mode (default: 1 frame per second)",
     )
     parser.add_argument(
+        "--export", "-e",
+        action="store_true",
+        help="Enable video export (saves processed video to file)",
+    )
+    parser.add_argument(
+        "--export-path", "-o",
+        type=str,
+        help="Output video path (default: auto-generated from source name + model + speed)",
+    )
+    parser.add_argument(
+        "--export-speed",
+        type=float,
+        help="Playback speed multiplier for exported video (default: from config)",
+    )
+    parser.add_argument(
         "--log-level", "-l",
         type=str,
         default="INFO",
@@ -589,6 +702,9 @@ def main():
         task=args.task,
         offline=args.offline,
         sample_interval=args.sample_interval,
+        export=args.export if args.export else None,
+        export_path=args.export_path,
+        export_speed=args.export_speed,
     )
 
     # Setup signal handlers

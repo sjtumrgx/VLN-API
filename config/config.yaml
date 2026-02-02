@@ -3,7 +3,7 @@
 # API Configuration
 api:
   # Default profile to use (can be overridden with --profile CLI argument)
-  default_profile: "dev"
+  default_profile: "Doro"
 
   # API Profiles - define multiple configurations and switch between them
   profiles:
@@ -22,8 +22,14 @@ api:
     - name: "Doro"
       base_url: "https://us.doro.lol"
       api_key: "sk-ijAm8ggmydGdlAptO2QzFxdcnQlcyFPsDAVuxqMk74Q8zvuI"
-      model: "gemini-3-flash-preview"
+      model: "gemini-2.5-flash"
       format: "gemini"
+
+    - name: "Privnode"
+      base_url: "https://privnode.com"
+      api_key: "sk-RIGht20sGMx5m2JhG5IhCbhihV5rh2hwK5J0xSCDSAxfhkoj"
+      model: "gemini-3-pro-preview"
+      format: "openai"
 
   # Legacy format (for backward compatibility, used if profiles is empty)
   # format: "openai"
@@ -45,6 +51,24 @@ video:
   # Reconnection attempts on disconnect
   reconnect_attempts: 3
   reconnect_delay: 1.0  # seconds
+
+# Image processing settings
+image:
+  # Target size for letterbox resize [width, height]
+  target_size: [960, 960]
+
+# Video export settings
+export:
+  # Enable video export (can be overridden with --export CLI flag)
+  enabled: true
+  # Default output directory for exported videos
+  output_dir: "output"
+  # Playback speed multiplier (e.g., 2.0 = 2x speed)
+  speed: 3.0
+  # Output video codec (mp4v, avc1, XVID)
+  codec: "mp4v"
+  # Output FPS (if not specified, uses source FPS / sample_interval * speed)
+  fps: null
 
 # Waypoint generation settings
 waypoints:
