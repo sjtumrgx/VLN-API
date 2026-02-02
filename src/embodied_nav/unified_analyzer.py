@@ -31,8 +31,8 @@ UNIFIED_PROMPT = """Analyze this image for robot navigation.
 
 **Coordinate system:** Origin (0,0) at TOP-LEFT. X increases RIGHT, Y increases DOWN.
 
-**Waypoint y-coordinates (FIXED):**
-- Point 1: y={y1} (nearest)
+**Waypoint positions (y-coordinates are FIXED):**
+- Point 1: x=320 (FIXED at center), y={y1} (nearest)
 - Point 2: y={y2}
 - Point 3: y={y3}
 - Point 4: y={y4}
@@ -42,7 +42,7 @@ Analyze the scene and provide:
 1. Brief scene description (what's relevant to the task)
 2. Task understanding (where is the target, current situation)
 3. Navigation intent (what action to take)
-4. 5 waypoint x-coordinates to guide the robot
+4. x-coordinates for waypoints 2-5 to guide the robot
 
 Output JSON only:
 ```json
@@ -51,12 +51,11 @@ Output JSON only:
   "task_understanding": "Target location and current situation",
   "intent": "Action: move forward / turn left / turn right / approach target",
   "reasoning": "Why this action",
-  "waypoints": [x1, x2, x3, x4, x5]
+  "waypoints": [x2, x3, x4, x5]
 }}
 ```
 
-- waypoints: x-coordinates (0-640) for all 5 points
-- Point 1 starts near bottom center (around x=320)
+- waypoints: x-coordinates (0-640) for points 2-5 only (point 1 is fixed at x=320)
 - Guide path toward task target while avoiding obstacles
 - Keep response concise."""
 
@@ -156,20 +155,24 @@ class UnifiedAnalyzer:
             # Parse waypoints
             x_positions = data.get("waypoints", [])
 
-            if len(x_positions) >= self.num_waypoints:
-                # Use provided x-coordinates
-                for i in range(self.num_waypoints):
+            # Waypoint 1 is always at center (x=320)
+            center_x = 320
+
+            if len(x_positions) >= self.num_waypoints - 1:
+                # x_positions contains x2, x3, x4, x5 (4 values)
+                waypoints.append(Waypoint(index=1, x=center_x, y=int(y_positions[0])))
+                for i in range(self.num_waypoints - 1):
                     waypoints.append(Waypoint(
-                        index=i + 1,
+                        index=i + 2,
                         x=max(0, min(640, int(x_positions[i]))),
-                        y=int(y_positions[i]),
+                        y=int(y_positions[i + 1]),
                     ))
             else:
                 # Fallback to center
                 for i in range(self.num_waypoints):
                     waypoints.append(Waypoint(
                         index=i + 1,
-                        x=320,
+                        x=center_x,
                         y=int(y_positions[i]),
                     ))
 
