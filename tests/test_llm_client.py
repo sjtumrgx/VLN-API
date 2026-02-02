@@ -66,14 +66,62 @@ class TestEncodeImage:
         assert result.mime_type == "image/jpeg"
         assert len(result.data) > 0
 
-    def test_encode_bytes(self):
-        """Test encoding raw bytes."""
-        data = b"fake image data"
+    def test_encode_numpy_array_with_letterbox(self):
+        """Test encoding numpy array with letterbox resize."""
+        # Create a non-square test image
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        img[:, :] = [0, 255, 0]  # Green in BGR
 
-        result = encode_image_to_base64(data)
+        result = encode_image_to_base64(img, apply_letterbox=True, target_size=(640, 640))
 
-        assert result.data == data
+        assert isinstance(result, ImageInput)
         assert result.mime_type == "image/jpeg"
+        assert len(result.data) > 0
+
+    def test_encode_numpy_array_without_letterbox(self):
+        """Test encoding numpy array without letterbox resize."""
+        img = np.zeros((100, 200, 3), dtype=np.uint8)
+
+        result = encode_image_to_base64(img, apply_letterbox=False)
+
+        assert isinstance(result, ImageInput)
+        assert result.mime_type == "image/jpeg"
+
+    def test_letterbox_square_image(self):
+        """Test letterbox with square image."""
+        from embodied_nav.llm_client.image_utils import letterbox
+
+        img = np.zeros((640, 640, 3), dtype=np.uint8)
+        result, scale, (pad_w, pad_h) = letterbox(img, (640, 640))
+
+        assert result.shape == (640, 640, 3)
+        assert scale == 1.0
+        assert pad_w == 0
+        assert pad_h == 0
+
+    def test_letterbox_wide_image(self):
+        """Test letterbox with wide image."""
+        from embodied_nav.llm_client.image_utils import letterbox
+
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        result, scale, (pad_w, pad_h) = letterbox(img, (640, 640))
+
+        assert result.shape == (640, 640, 3)
+        assert scale == 1.0  # Width fits exactly
+        assert pad_w == 0
+        assert pad_h == 80  # (640 - 480) / 2
+
+    def test_letterbox_tall_image(self):
+        """Test letterbox with tall image."""
+        from embodied_nav.llm_client.image_utils import letterbox
+
+        img = np.zeros((800, 400, 3), dtype=np.uint8)
+        result, scale, (pad_w, pad_h) = letterbox(img, (640, 640))
+
+        assert result.shape == (640, 640, 3)
+        assert scale == 0.8  # 640 / 800
+        assert pad_w == 160  # (640 - 320) / 2
+        assert pad_h == 0
 
 
 class TestGeminiNativeClient:

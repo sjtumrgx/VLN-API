@@ -3,7 +3,7 @@
 from .base import BaseLLMClient, ImageInput, LLMResponse
 from .gemini import GeminiNativeClient
 from .openai_compat import OpenAICompatibleClient
-from .image_utils import encode_image_to_base64, decode_base64_to_image
+from .image_utils import encode_image_to_base64, decode_base64_to_image, letterbox
 
 __all__ = [
     "BaseLLMClient",
@@ -13,4 +13,5 @@ __all__ = [
     "OpenAICompatibleClient",
     "encode_image_to_base64",
     "decode_base64_to_image",
+    "letterbox",
 ]
