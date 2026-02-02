@@ -22,52 +22,32 @@ class UnifiedAnalysisResult:
     intent: str
     reasoning: str
     waypoints: List[Waypoint]
+    linear_velocity: float = 0.0  # m/s
+    angular_velocity: float = 0.0  # rad/s
     raw_response: str = ""
 
 
-UNIFIED_PROMPT = """Analyze this image for robot navigation.
+UNIFIED_PROMPT = """Task: {task}
 
-**Task:** {task}
+Image size: {width}x{height}. Waypoint y-coordinates (FIXED): y1={y1}, y2={y2}, y3={y3}, y4={y4}, y5={y5}
+Point 1 is fixed at x={center_x}. Provide x-coordinates for points 2-5.
 
-**Coordinate system:** Origin (0,0) at TOP-LEFT. X increases RIGHT, Y increases DOWN.
+Waypoints MUST land on walkable ground or the target object, NOT on obstacles.
 
-**Waypoint positions (y-coordinates are FIXED):**
-- Point 1: x=320 (FIXED at center), y={y1} (nearest)
-- Point 2: y={y2}
-- Point 3: y={y3}
-- Point 4: y={y4}
-- Point 5: y={y5} (farthest)
-
-Analyze the scene and provide:
-1. Brief scene description (what's relevant to the task)
-2. Task understanding (where is the target, current situation)
-3. Navigation intent (what action to take)
-4. x-coordinates for waypoints 2-5 to guide the robot
-
-**CRITICAL:** The 4 waypoints (x2-x5) represent the robot's future footsteps!
-- They MUST land on the GROUND (floor, road, walkable surface) or the FINAL TARGET object
-- They MUST NOT land on walls, furniture, obstacles, or any irrelevant objects
-- Think of them as where the robot will actually step/move to
-
-Output JSON only:
+Output JSON (ALL text in English only):
 ```json
 {{
-  "scene": "Brief scene description relevant to task",
-  "task_understanding": "Target location and current situation",
-  "intent": "Action: move forward / turn left / turn right / approach target",
-  "reasoning": "Why this action",
-  "waypoints": [x2, x3, x4, x5]
+  "scene": "brief scene description",
+  "task": "target location and situation",
+  "intent": "forward/left/right/approach",
+  "waypoints": [x2, x3, x4, x5],
+  "v": 0.5,
+  "w": 0.0
 }}
 ```
+v: linear velocity (0.0-1.0 m/s), w: angular velocity (-1.0 to 1.0 rad/s, positive=left)"""
 
-- waypoints: x-coordinates (0-640) for points 2-5 only (point 1 is fixed at x=320)
-- Guide path toward task target on walkable ground
-- Keep response concise."""
-
-UNIFIED_SYSTEM_PROMPT = """You are a robot navigation system.
-Analyze the image, understand the task, and output navigation waypoints.
-Coordinate: origin top-left, x right, y down. Image is 640x640.
-Output valid JSON only."""
+UNIFIED_SYSTEM_PROMPT = """Robot navigation system. Origin top-left, x right, y down. Output JSON only. All text must be in English."""
 
 
 class UnifiedAnalyzer:
@@ -92,22 +72,28 @@ class UnifiedAnalyzer:
         """Analyze frame for navigation in a single API call.
 
         Args:
-            frame: Image frame as numpy array (BGR), expected to be 640x640
+            frame: Image frame as numpy array (BGR)
             task: Navigation task/goal
             pad_h: Vertical padding from letterbox
 
         Returns:
             UnifiedAnalysisResult with analysis and waypoints
         """
-        # Calculate waypoint y-positions
-        y_positions = self._calculate_vertical_positions(640, pad_h)
+        height, width = frame.shape[:2]
 
-        # Encode image (no letterbox needed - frame is already 640x640)
+        # Calculate waypoint y-positions
+        y_positions = self._calculate_vertical_positions(height, pad_h)
+
+        # Encode image (no letterbox needed - frame is already resized)
         image_input, _ = encode_image_to_base64(frame, apply_letterbox=False)
 
         # Build prompt
+        center_x = width // 2
         prompt = UNIFIED_PROMPT.format(
             task=task,
+            width=width,
+            height=height,
+            center_x=center_x,
             y1=y_positions[0],
             y2=y_positions[1],
             y3=y_positions[2],
@@ -123,7 +109,7 @@ class UnifiedAnalyzer:
         )
 
         # Parse response
-        return self._parse_response(response.text, y_positions)
+        return self._parse_response(response.text, y_positions, width)
 
     def _calculate_vertical_positions(self, height: int, pad_h: int = 0) -> List[int]:
         """Calculate vertical positions for waypoints within actual image region."""
@@ -138,30 +124,35 @@ class UnifiedAnalyzer:
         return [int(bottom - i * step) for i in range(self.num_waypoints)]
 
     def _parse_response(
-        self, text: str, y_positions: List[int]
+        self, text: str, y_positions: List[int], image_width: int = 640
     ) -> UnifiedAnalysisResult:
         """Parse LLM response into unified result."""
         # Default values
         scene_summary = ""
         task_understanding = ""
         intent = "continue forward"
-        reasoning = ""
+        linear_velocity = 0.0
+        angular_velocity = 0.0
         waypoints = []
+
+        center_x = image_width // 2
 
         try:
             json_str = self._extract_json(text)
             data = json.loads(json_str)
 
             scene_summary = data.get("scene", "")
-            task_understanding = data.get("task_understanding", "")
+            task_understanding = data.get("task", "")
             intent = data.get("intent", "continue forward")
-            reasoning = data.get("reasoning", "")
+            linear_velocity = float(data.get("v", 0.0))
+            angular_velocity = float(data.get("w", 0.0))
+
+            # Clamp velocities to valid range
+            linear_velocity = max(0.0, min(1.0, linear_velocity))
+            angular_velocity = max(-1.0, min(1.0, angular_velocity))
 
             # Parse waypoints
             x_positions = data.get("waypoints", [])
-
-            # Waypoint 1 is always at center (x=320)
-            center_x = 320
 
             if len(x_positions) >= self.num_waypoints - 1:
                 # x_positions contains x2, x3, x4, x5 (4 values)
@@ -169,7 +160,7 @@ class UnifiedAnalyzer:
                 for i in range(self.num_waypoints - 1):
                     waypoints.append(Waypoint(
                         index=i + 2,
-                        x=max(0, min(640, int(x_positions[i]))),
+                        x=max(0, min(image_width, int(x_positions[i]))),
                         y=int(y_positions[i + 1]),
                     ))
             else:
@@ -188,7 +179,7 @@ class UnifiedAnalyzer:
             for i in range(self.num_waypoints):
                 waypoints.append(Waypoint(
                     index=i + 1,
-                    x=320,
+                    x=center_x,
                     y=int(y_positions[i]),
                 ))
 
@@ -196,8 +187,10 @@ class UnifiedAnalyzer:
             scene_summary=scene_summary,
             task_understanding=task_understanding,
             intent=intent,
-            reasoning=reasoning,
+            reasoning="",
             waypoints=waypoints,
+            linear_velocity=linear_velocity,
+            angular_velocity=angular_velocity,
             raw_response=text,
         )
 
