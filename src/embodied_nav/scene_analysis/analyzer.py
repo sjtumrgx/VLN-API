@@ -70,13 +70,13 @@ class SceneAnalyzer:
         """Analyze a frame for navigation.
 
         Args:
-            frame: Image frame as numpy array (BGR)
+            frame: Image frame as numpy array (BGR), expected to be 640x640
 
         Returns:
             SceneAnalysisResult with detected objects, obstacles, and traversable regions
         """
-        # Encode image
-        image_input = encode_image_to_base64(frame)
+        # Encode image (no letterbox needed - frame is already 640x640)
+        image_input, _ = encode_image_to_base64(frame, apply_letterbox=False)
 
         # Call LLM
         response = await self.llm_client.generate(
@@ -85,7 +85,7 @@ class SceneAnalyzer:
             system_prompt=SCENE_ANALYSIS_SYSTEM_PROMPT,
         )
 
-        # Parse response
+        # Parse response (no coordinate conversion needed)
         return self._parse_response(response.text)
 
     def _parse_response(self, text: str) -> SceneAnalysisResult:
@@ -162,7 +162,14 @@ class SceneAnalyzer:
         return text
 
     def _parse_bbox(self, bbox_data: dict) -> BoundingBox:
-        """Parse bounding box from dict."""
+        """Parse bounding box from dict.
+
+        Args:
+            bbox_data: Raw bbox dict from LLM response
+
+        Returns:
+            BoundingBox (coordinates are used directly, no conversion needed)
+        """
         return BoundingBox(
             x=int(bbox_data.get("x", 0)),
             y=int(bbox_data.get("y", 0)),

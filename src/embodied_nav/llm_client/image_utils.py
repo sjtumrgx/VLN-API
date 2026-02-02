@@ -2,14 +2,54 @@
 
 import base64
 import io
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
 from PIL import Image
 
 from .base import ImageInput
+
+
+@dataclass
+class LetterboxInfo:
+    """Information about letterbox transformation for coordinate conversion."""
+
+    scale: float  # Scale ratio applied to original image
+    pad_w: int  # Horizontal padding added
+    pad_h: int  # Vertical padding added
+    original_size: Tuple[int, int]  # Original (width, height)
+    target_size: Tuple[int, int]  # Target (width, height) after letterbox
+
+    def to_original_coords(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
+        """Convert bbox from letterboxed coordinates to original image coordinates.
+
+        Args:
+            x, y, w, h: Bounding box in letterboxed image coordinates
+
+        Returns:
+            (x, y, w, h) in original image coordinates
+        """
+        # Remove padding offset
+        x_unpadded = x - self.pad_w
+        y_unpadded = y - self.pad_h
+
+        # Scale back to original size
+        orig_x = int(x_unpadded / self.scale)
+        orig_y = int(y_unpadded / self.scale)
+        orig_w = int(w / self.scale)
+        orig_h = int(h / self.scale)
+
+        # Clamp to valid range
+        orig_w_img, orig_h_img = self.original_size
+        orig_x = max(0, min(orig_x, orig_w_img))
+        orig_y = max(0, min(orig_y, orig_h_img))
+        orig_w = max(0, min(orig_w, orig_w_img - orig_x))
+        orig_h = max(0, min(orig_h, orig_h_img - orig_y))
+
+        return orig_x, orig_y, orig_w, orig_h
 
 
 def letterbox(
@@ -52,7 +92,7 @@ def encode_image_to_base64(
     image: Union[np.ndarray, Image.Image, bytes, str, Path],
     apply_letterbox: bool = True,
     target_size: Tuple[int, int] = (640, 640),
-) -> ImageInput:
+) -> Tuple[ImageInput, Optional[LetterboxInfo]]:
     """Encode an image to base64 for LLM API.
 
     Args:
@@ -61,7 +101,7 @@ def encode_image_to_base64(
         target_size: Target size for letterbox (default 640x640)
 
     Returns:
-        ImageInput with base64 encoded data and MIME type
+        Tuple of (ImageInput with base64 encoded data, LetterboxInfo or None)
     """
     # Convert to numpy array first if needed
     if isinstance(image, (str, Path)):
@@ -84,16 +124,27 @@ def encode_image_to_base64(
     else:
         raise TypeError(f"Unsupported image type: {type(image)}")
 
+    # Store original size
+    original_h, original_w = img_array.shape[:2]
+    letterbox_info = None
+
     # Apply letterbox resize
     if apply_letterbox:
-        img_array, _, _ = letterbox(img_array, target_size)
+        img_array, scale, (pad_w, pad_h) = letterbox(img_array, target_size)
+        letterbox_info = LetterboxInfo(
+            scale=scale,
+            pad_w=pad_w,
+            pad_h=pad_h,
+            original_size=(original_w, original_h),
+            target_size=target_size,
+        )
 
     # Encode to JPEG
     success, encoded = cv2.imencode(".jpg", img_array)
     if not success:
         raise ValueError("Failed to encode image")
 
-    return ImageInput(data=encoded.tobytes(), mime_type="image/jpeg")
+    return ImageInput(data=encoded.tobytes(), mime_type="image/jpeg"), letterbox_info
 
 
 def _get_mime_type(suffix: str) -> str:

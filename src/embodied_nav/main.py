@@ -11,6 +11,8 @@ from typing import List, Optional
 import cv2
 import yaml
 
+from .llm_client import GeminiNativeClient, OpenAICompatibleClient, letterbox
+
 
 @dataclass
 class Profile:
@@ -22,7 +24,6 @@ class Profile:
     model: str
     format: str  # "gemini" or "openai"
 
-from .llm_client import GeminiNativeClient, OpenAICompatibleClient
 from .scene_analysis import SceneAnalyzer
 from .task_reasoning import TaskReasoner
 from .video_capture import VideoCapture
@@ -390,7 +391,9 @@ class EmbodiedNavigationSystem:
             await asyncio.sleep(0.1)
             return
 
-        image_size = (frame.shape[1], frame.shape[0])
+        # Letterbox frame to 640x640 for consistent processing
+        frame, _, _ = letterbox(frame, target_size=(640, 640))
+        image_size = (640, 640)
 
         try:
             # Run scene analysis
@@ -436,7 +439,9 @@ class EmbodiedNavigationSystem:
 
     async def _process_frame_offline(self, frame, frame_idx: int, total_frames: int):
         """Process a single frame in offline mode."""
-        image_size = (frame.shape[1], frame.shape[0])
+        # Letterbox frame to 640x640 for consistent processing
+        frame, _, _ = letterbox(frame, target_size=(640, 640))
+        image_size = (640, 640)
 
         try:
             # Run scene analysis
