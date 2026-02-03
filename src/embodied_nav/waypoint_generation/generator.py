@@ -1,17 +1,11 @@
-"""Waypoint generation for navigation paths."""
+"""Waypoint data structures and curve generation for visualization."""
 
-import json
 import logging
-import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 from scipy import interpolate
-
-from ..llm_client import BaseLLMClient
-from ..scene_analysis import SceneAnalysisResult
-from ..task_reasoning import TaskReasoningResult
 
 logger = logging.getLogger(__name__)
 
@@ -24,204 +18,16 @@ class Waypoint:
     y: int
 
 
-@dataclass
-class WaypointGenerationResult:
-    """Result of waypoint generation."""
-    waypoints: List[Waypoint]
-    raw_response: str = ""
-
-
-WAYPOINT_PROMPT = """Based on the scene analysis and navigation intent, suggest horizontal positions for 5 waypoints.
-
-**Scene:** {scene_summary}
-**Intent:** {intent}
-**Image size:** 640x640 (coordinate origin at top-left, x increases rightward, y increases downward)
-
-The 5 waypoints have FIXED y-coordinates (vertical positions):
-- Waypoint 1: y={y1} (bottom, nearest to robot)
-- Waypoint 2: y={y2}
-- Waypoint 3: y={y3}
-- Waypoint 4: y={y4}
-- Waypoint 5: y={y5} (top, farthest from robot)
-
-Waypoint 1 starts at bottom center (x=320).
-
-Suggest x-coordinates for waypoints 2-5 based on the scene. Consider:
-- Obstacles to avoid
-- Clear paths to follow
-- The navigation intent
-
-Output JSON:
-```json
-{{
-  "waypoint_x_positions": [x2, x3, x4, x5],
-  "reasoning": "Brief explanation"
-}}
-```
-
-x values should be between 0 and 640."""
-
-WAYPOINT_SYSTEM_PROMPT = """You are a path planning system.
-Given scene analysis, suggest waypoint x-coordinates for navigation.
-Coordinate system: origin at top-left, x increases rightward, y increases downward.
-Output valid JSON with x-coordinates only (y-coordinates are fixed)."""
-
-
 class WaypointGenerator:
-    """Generates navigation waypoints."""
+    """Generates smooth curves through waypoints for visualization."""
 
-    def __init__(
-        self,
-        llm_client: Optional[BaseLLMClient] = None,
-        num_waypoints: int = 5,
-    ):
+    def __init__(self, num_waypoints: int = 5):
         """Initialize waypoint generator.
 
         Args:
-            llm_client: Optional LLM client for intelligent positioning
-            num_waypoints: Number of waypoints to generate (default 5)
+            num_waypoints: Number of waypoints (default 5)
         """
-        self.llm_client = llm_client
         self.num_waypoints = num_waypoints
-
-    async def generate(
-        self,
-        image_size: Tuple[int, int],
-        scene_analysis: Optional[SceneAnalysisResult] = None,
-        task_reasoning: Optional[TaskReasoningResult] = None,
-        pad_h: int = 0,
-    ) -> WaypointGenerationResult:
-        """Generate navigation waypoints.
-
-        Args:
-            image_size: (width, height) of the image (640, 640)
-            scene_analysis: Optional scene analysis result
-            task_reasoning: Optional task reasoning result
-            pad_h: Vertical padding from letterbox (actual image starts at pad_h)
-
-        Returns:
-            WaypointGenerationResult with 5 waypoints
-        """
-        width, height = image_size
-
-        # Calculate vertical positions based on actual image region (excluding padding)
-        # Actual image region: from pad_h to (height - pad_h)
-        y_positions = self._calculate_vertical_positions(height, pad_h)
-
-        # First waypoint is always at bottom center
-        center_x = width // 2
-        x_positions = [center_x]
-
-        # Get horizontal positions for remaining waypoints
-        if self.llm_client and scene_analysis:
-            llm_x_positions, raw_response = await self._get_llm_positions(
-                image_size, scene_analysis, task_reasoning, y_positions
-            )
-            if llm_x_positions:
-                x_positions.extend(llm_x_positions)
-            else:
-                # Fallback to center
-                x_positions.extend([center_x] * (self.num_waypoints - 1))
-                raw_response = "LLM positioning failed, using center fallback"
-        else:
-            # No LLM, use center positions
-            x_positions.extend([center_x] * (self.num_waypoints - 1))
-            raw_response = "No LLM client, using center positions"
-
-        # Create waypoints
-        waypoints = []
-        for i in range(self.num_waypoints):
-            waypoints.append(Waypoint(
-                index=i + 1,
-                x=int(x_positions[i]),
-                y=int(y_positions[i]),
-            ))
-
-        return WaypointGenerationResult(
-            waypoints=waypoints,
-            raw_response=raw_response,
-        )
-
-    def _calculate_vertical_positions(self, height: int, pad_h: int = 0) -> List[int]:
-        """Calculate vertical positions for waypoints within actual image region.
-
-        Args:
-            height: Total image height (640)
-            pad_h: Vertical padding from letterbox
-
-        Returns:
-            List of y-coordinates from bottom to top (within actual image region)
-        """
-        # Actual image region: from pad_h (top) to (height - pad_h) (bottom)
-        image_top = pad_h
-        image_bottom = height - pad_h
-        image_height = image_bottom - image_top
-
-        # Waypoint 1 (nearest): at bottom of actual image
-        # Waypoint 5 (farthest): at middle of actual image (not at top, to stay in visible area)
-        bottom = image_bottom
-        top = image_top + image_height // 2  # Middle of actual image
-
-        # Equal spacing from bottom to middle
-        step = (bottom - top) / (self.num_waypoints - 1)
-        return [int(bottom - i * step) for i in range(self.num_waypoints)]
-
-    async def _get_llm_positions(
-        self,
-        image_size: Tuple[int, int],
-        scene_analysis: SceneAnalysisResult,
-        task_reasoning: Optional[TaskReasoningResult],
-        y_positions: List[int],
-    ) -> Tuple[Optional[List[int]], str]:
-        """Get horizontal positions from LLM.
-
-        Returns:
-            Tuple of (x_positions for waypoints 2-5, raw_response)
-        """
-        width, height = image_size
-
-        intent = task_reasoning.intent if task_reasoning else "navigate forward"
-
-        prompt = WAYPOINT_PROMPT.format(
-            scene_summary=scene_analysis.summary,
-            intent=intent,
-            y1=y_positions[0],
-            y2=y_positions[1],
-            y3=y_positions[2],
-            y4=y_positions[3],
-            y5=y_positions[4],
-        )
-
-        try:
-            response = await self.llm_client.generate(
-                prompt=prompt,
-                system_prompt=WAYPOINT_SYSTEM_PROMPT,
-            )
-
-            # Parse response
-            json_str = self._extract_json(response.text)
-            data = json.loads(json_str)
-
-            x_positions = data.get("waypoint_x_positions", [])
-            if len(x_positions) >= self.num_waypoints - 1:
-                # Clamp values to valid range
-                x_positions = [max(0, min(width, int(x))) for x in x_positions[:self.num_waypoints - 1]]
-                return x_positions, response.text
-
-        except Exception as e:
-            logger.error(f"Failed to get LLM positions: {e}")
-
-        return None, ""
-
-    def _extract_json(self, text: str) -> str:
-        """Extract JSON from text."""
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-        if match:
-            return match.group(1)
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            return match.group(0)
-        return text
 
     def get_smooth_curve(
         self,

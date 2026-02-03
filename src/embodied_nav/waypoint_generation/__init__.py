@@ -1,9 +1,8 @@
 """Waypoint generation module."""
 
-from .generator import Waypoint, WaypointGenerationResult, WaypointGenerator
+from .generator import Waypoint, WaypointGenerator
 
 __all__ = [
     "Waypoint",
-    "WaypointGenerationResult",
     "WaypointGenerator",
 ]
