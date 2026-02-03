@@ -20,7 +20,7 @@ class GeminiNativeClient(BaseLLMClient):
         base_url: str,
         api_key: str,
         model: str = "gemini-3-flash-preview",
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         max_retries: int = 3,
     ):
         """Initialize Gemini native client.

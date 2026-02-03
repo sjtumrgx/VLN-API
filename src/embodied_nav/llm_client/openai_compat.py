@@ -20,7 +20,7 @@ class OpenAICompatibleClient(BaseLLMClient):
         base_url: str,
         api_key: str,
         model: str = "gemini-2.5-pro",
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         max_retries: int = 3,
     ):
         """Initialize OpenAI compatible client.
@@ -89,6 +89,7 @@ class OpenAICompatibleClient(BaseLLMClient):
         request_body = {
             "model": self.model,
             "messages": messages,
+            "temperature": 0,
         }
 
         # Build URL

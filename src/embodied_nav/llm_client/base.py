@@ -37,7 +37,7 @@ class BaseLLMClient(ABC):
         base_url: str,
         api_key: str,
         model: str,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         max_retries: int = 3,
     ):
         """Initialize LLM client.

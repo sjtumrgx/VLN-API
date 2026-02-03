@@ -31,7 +31,7 @@ class UnifiedAnalysisResult:
 UNIFIED_PROMPT = """Task: {task}
 
 Image size: {width}x{height}. Waypoint y-coordinates (FIXED): y1={y1}, y2={y2}, y3={y3}, y4={y4}, y5={y5}
-Point 1 is fixed at x={center_x}. Provide x-coordinates for points 2-5.
+Point 1 is fixed at x=0.5 (center). Provide x-coordinates for points 2-5 as ratios (0.0=left edge, 1.0=right edge).
 
 Waypoints MUST land on walkable ground or the target object, NOT on obstacles.
 
@@ -42,12 +42,13 @@ Output JSON (ALL text in English only):
   "scene": "brief scene description",
   "task": "target location and situation",
   "intent": "forward/left/right/approach",
-  "waypoints": [x2, x3, x4, x5],
+  "waypoints": [x2_ratio, x3_ratio, x4_ratio, x5_ratio],
   "v":  "Give an estimate of linear velocity (0.0-1.0 m/s)",
   "w": "Give an estimate of angular velocity (-1.0 to 1.0 rad/s, positive=left)"
 }}
 ```
 task_en: translate the user task to English (keep original if already English)
+waypoints: x-coordinates as ratios (0.0-1.0), e.g. 0.5=center, 0.3=left, 0.7=right
 v: linear velocity (0.0-1.0 m/s), w: angular velocity (-1.0 to 1.0 rad/s, positive=left)"""
 
 UNIFIED_SYSTEM_PROMPT = """Robot navigation system. Origin top-left, x right, y down. Output JSON only. All text must be in English."""
@@ -96,7 +97,6 @@ class UnifiedAnalyzer:
             task=task,
             width=width,
             height=height,
-            center_x=center_x,
             y1=y_positions[0],
             y2=y_positions[1],
             y3=y_positions[2],
@@ -156,16 +156,20 @@ class UnifiedAnalyzer:
             linear_velocity = max(0.0, min(1.0, linear_velocity))
             angular_velocity = max(-1.0, min(1.0, angular_velocity))
 
-            # Parse waypoints
-            x_positions = data.get("waypoints", [])
+            # Parse waypoints (x values are now ratios 0.0-1.0)
+            x_ratios = data.get("waypoints", [])
 
-            if len(x_positions) >= self.num_waypoints - 1:
-                # x_positions contains x2, x3, x4, x5 (4 values)
+            if len(x_ratios) >= self.num_waypoints - 1:
+                # x_ratios contains x2, x3, x4, x5 as ratios (4 values)
                 waypoints.append(Waypoint(index=1, x=center_x, y=int(y_positions[0])))
                 for i in range(self.num_waypoints - 1):
+                    # Convert ratio to pixel coordinate
+                    ratio = float(x_ratios[i])
+                    ratio = max(0.0, min(1.0, ratio))  # Clamp to valid range
+                    x_pixel = int(ratio * image_width)
                     waypoints.append(Waypoint(
                         index=i + 2,
-                        x=max(0, min(image_width, int(x_positions[i]))),
+                        x=x_pixel,
                         y=int(y_positions[i + 1]),
                     ))
             else:
@@ -202,10 +206,30 @@ class UnifiedAnalyzer:
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""
+        # Log raw response for debugging
+        logger.debug(f"Raw LLM response: {text[:500]}...")
+
+        # Try markdown code block first
         match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
         if match:
             return match.group(1)
-        match = re.search(r"\{[\s\S]*\}", text)
+
+        # Try to find a single JSON object (non-greedy)
+        match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
         if match:
             return match.group(0)
+
+        # Fallback: find first { to last } but be careful
+        start = text.find('{')
+        if start != -1:
+            # Find matching closing brace
+            depth = 0
+            for i, c in enumerate(text[start:], start):
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:i+1]
+
         return text
