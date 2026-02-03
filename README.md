@@ -18,20 +18,14 @@ LLM-powered visual navigation system for embodied agents. The system uses vision
 ```
 src/embodied_nav/
 ├── main.py                 # Main application entry point
+├── unified_analyzer.py     # Core prompt for scene analysis and navigation
 ├── llm_client/             # LLM API clients
 │   ├── base.py             # Base client interface
 │   ├── gemini.py           # Gemini native API client
 │   ├── openai_compat.py    # OpenAI-compatible API client
 │   └── image_utils.py      # Image encoding utilities
-├── scene_analysis/         # Scene understanding module
-│   ├── analyzer.py         # LLM-based scene analyzer
-│   ├── prompts.py          # Scene analysis prompts
-│   └── schema.py           # Data structures
-├── task_reasoning/         # Navigation reasoning module
-│   ├── reasoner.py         # Task reasoning logic
-│   └── prompts.py          # Reasoning prompts
-├── waypoint_generation/    # Path planning module
-│   └── generator.py        # Waypoint generation with spline interpolation
+├── waypoint_generation/    # Path visualization module
+│   └── generator.py        # Smooth curve rendering with spline interpolation
 ├── video_capture/          # Video input module
 │   └── capture.py          # Camera/file capture with threading
 └── visualization/          # Display module
