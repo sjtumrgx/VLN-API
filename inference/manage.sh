@@ -136,31 +136,72 @@ do_start() {
 }
 
 do_stop() {
-    if ! is_running; then
+    local pid=$(get_pid)
+
+    # Find vllm processes by various patterns (case-insensitive for VLLM:: processes)
+    local vllm_pids=$(pgrep -f "vllm.*--port $PORT" 2>/dev/null || true)
+    local server_pids=$(pgrep -f "start_server.py" 2>/dev/null || true)
+    # Match VLLM:: worker and engine processes (these have uppercase names)
+    local worker_pids=$(pgrep -f "VLLM::" 2>/dev/null || true)
+
+    # Combine all PIDs
+    local all_pids="$pid $vllm_pids $server_pids $worker_pids"
+    all_pids=$(echo "$all_pids" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
+
+    if [ -z "$all_pids" ] || [ "$all_pids" = " " ]; then
         echo "Server is not running"
         [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
         return 0
     fi
 
-    local pid=$(get_pid)
-    echo "Stopping server (PID: $pid)..."
+    echo "Found processes to stop: $all_pids"
 
-    # Send SIGTERM for graceful shutdown
-    kill -TERM "$pid" 2>/dev/null
+    # Send SIGTERM to all processes
+    for p in $all_pids; do
+        if kill -0 "$p" 2>/dev/null; then
+            echo "Sending SIGTERM to process $p..."
+            kill -TERM "$p" 2>/dev/null || true
+        fi
+    done
 
-    # Wait for process to terminate (max 30 seconds)
+    # Wait for processes to terminate (max 15 seconds)
+    echo -n "Waiting for processes to terminate"
     local count=0
-    while kill -0 "$pid" 2>/dev/null && [ $count -lt 30 ]; do
-        sleep 1
-        count=$((count + 1))
-        echo -n "."
+    local still_running=true
+    while [ "$still_running" = true ] && [ $count -lt 15 ]; do
+        still_running=false
+        for p in $all_pids; do
+            if kill -0 "$p" 2>/dev/null; then
+                still_running=true
+                break
+            fi
+        done
+        if [ "$still_running" = true ]; then
+            sleep 1
+            count=$((count + 1))
+            echo -n "."
+        fi
     done
     echo ""
 
-    # Force kill if still running
-    if kill -0 "$pid" 2>/dev/null; then
-        echo "Force killing process..."
-        kill -9 "$pid" 2>/dev/null
+    # Force kill any remaining processes
+    for p in $all_pids; do
+        if kill -0 "$p" 2>/dev/null; then
+            echo "Force killing process $p..."
+            kill -9 "$p" 2>/dev/null || true
+        fi
+    done
+
+    # Final cleanup: kill any remaining VLLM processes
+    local remaining=$(pgrep -f "VLLM::" 2>/dev/null || true)
+    remaining="$remaining $(pgrep -f "vllm" 2>/dev/null || true)"
+    remaining=$(echo "$remaining" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
+    if [ -n "$remaining" ] && [ "$remaining" != " " ]; then
+        echo "Cleaning up remaining processes: $remaining"
+        for p in $remaining; do
+            kill -9 "$p" 2>/dev/null || true
+        done
+        sleep 1
     fi
 
     rm -f "$PID_FILE"
