@@ -11,6 +11,7 @@ LLM-powered visual navigation system for embodied agents. The system uses vision
 - **Visualization**: Real-time display with color-coded waypoints (green=near, red=far), bounding boxes, and navigation intent overlay
 - **Multi-API Support**: Supports both Gemini native API and OpenAI-compatible API formats
 - **Profile-based Configuration**: Define multiple API configurations and switch between them via CLI
+- **Self-hosted Inference**: Optional local Qwen3-VL inference server with vLLM for cost-effective deployment
 
 ## Architecture
 
@@ -35,6 +36,12 @@ src/embodied_nav/
 │   └── capture.py          # Camera/file capture with threading
 └── visualization/          # Display module
     └── visualizer.py       # OpenCV-based visualization
+
+inference/                  # Self-hosted VLM inference server
+├── config.py               # Model paths and server configuration
+├── start_server.py         # vLLM server launcher
+├── manage.sh               # Service management (start/stop/status/health)
+└── deploy.sh               # Deployment script for remote server
 ```
 
 ## Installation
@@ -196,3 +203,89 @@ Uses the OpenAI chat completions format:
 ## License
 
 MIT
+
+## Self-hosted Inference Server
+
+For cost-effective deployment, you can run your own Qwen3-VL inference server using vLLM. This provides an OpenAI-compatible API endpoint.
+
+### Requirements
+
+- NVIDIA GPU(s) with CUDA support (tested on 4x RTX 5000 Ada, 32GB each)
+- Pre-downloaded Qwen3-VL model weights
+
+### Deployment
+
+```bash
+# Deploy to remote server (from local machine)
+cd inference
+./deploy.sh
+```
+
+The deploy script will:
+1. Install uv (if not present)
+2. Create a Python virtual environment
+3. Install vLLM and dependencies
+4. Transfer configuration files
+
+### Server Management
+
+On the remote server:
+
+```bash
+cd /data1/Qwen3VL/inference
+
+# Start server with 8B model (default)
+./manage.sh start --model 8b --daemon
+
+# Start server with 30B-A3B model
+./manage.sh start --model 30b --daemon
+
+# Check status
+./manage.sh status
+
+# Health check (API + GPU status)
+./manage.sh health
+
+# Stop server
+./manage.sh stop
+
+# Restart with different model
+./manage.sh restart --model 30b
+```
+
+### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--model`, `-m` | Model to load: `8b` or `30b` | `8b` |
+| `--port`, `-p` | API port | `8000` |
+| `--host` | Bind address | `0.0.0.0` |
+| `--tensor-parallel-size`, `-tp` | Number of GPUs | Auto-detect (4) |
+| `--daemon`, `-d` | Run in background | Foreground |
+
+### Using with Embodied Navigation
+
+Add a profile in `config/config.yaml`:
+
+```yaml
+api:
+  profiles:
+    - name: "local-qwen"
+      base_url: "http://192.168.1.100:8000"
+      api_key: "not-needed"
+      model: "Qwen3-VL-8B-Instruct"
+      format: "openai"
+```
+
+Then run:
+
+```bash
+uv run python -m embodied_nav --profile local-qwen
+```
+
+### Supported Models
+
+| Model | VRAM Required | Notes |
+|-------|---------------|-------|
+| Qwen3-VL-8B-Instruct | ~8GB per GPU | Fast, good for real-time |
+| Qwen3-VL-30B-A3B-Instruct | ~12GB per GPU | MoE, better quality |

@@ -1,0 +1,15 @@
+[project]
+name = "qwen3-vl-inference"
+version = "0.1.0"
+description = "Qwen3-VL inference server with vLLM"
+requires-python = ">=3.10"
+dependencies = [
+    "vllm>=0.6.0",
+    "transformers>=4.45.0",
+    "torch>=2.4.0",
+    "accelerate>=0.34.0",
+    "qwen-vl-utils>=0.0.8",
+]
+
+[tool.uv]
+# No build needed - just install dependencies directly

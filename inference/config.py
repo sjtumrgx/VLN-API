@@ -1,0 +1,28 @@
+"""Configuration constants for Qwen3-VL inference server."""
+
+# Model paths on server
+MODEL_BASE_PATH = "/data1/Qwen3VL"
+
+MODELS = {
+    "8b": {
+        "name": "Qwen3-VL-8B-Instruct",
+        "path": f"{MODEL_BASE_PATH}/models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+    },
+    "30b": {
+        "name": "Qwen3-VL-30B-A3B-Instruct",
+        "path": f"{MODEL_BASE_PATH}/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+    },
+}
+
+# Default server settings
+DEFAULT_MODEL = "8b"
+DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PORT = 8000
+DEFAULT_TENSOR_PARALLEL_SIZE = 4  # Use all 4 GPUs by default
+
+# GPU memory utilization (0.0-1.0)
+GPU_MEMORY_UTILIZATION = 0.8
+
+# Log file location
+LOG_DIR = "/data1/Qwen3VL/logs"
+PID_FILE = "/data1/Qwen3VL/vllm.pid"
