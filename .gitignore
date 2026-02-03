@@ -46,3 +46,14 @@ htmlcov/
 
 # Video files (large)
 video/
+
+# AI tools
+.claude/
+.codex/
+.opencode/
+
+# OpenSpec
+openspec/
+
+# Output
+output/
