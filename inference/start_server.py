@@ -35,9 +35,9 @@ def main():
     parser.add_argument(
         "--model",
         "-m",
-        choices=["8b", "30b"],
+        choices=["8b", "30b", "30b-thinking", "32b"],
         default=os.environ.get("MODEL", DEFAULT_MODEL),
-        help=f"Model to load: 8b or 30b (default: {DEFAULT_MODEL})",
+        help=f"Model to load: 8b, 30b, 30b-thinking, or 32b (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--tensor-parallel-size",
@@ -64,6 +64,18 @@ def main():
         default=GPU_MEMORY_UTILIZATION,
         help=f"GPU memory utilization ratio (default: {GPU_MEMORY_UTILIZATION})",
     )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=32768,
+        help="Maximum model context length (default: 32768, reduce if OOM)",
+    )
+    parser.add_argument(
+        "--cpu-offload-gb",
+        type=float,
+        default=0,
+        help="GiB of CPU memory for KV cache offload (default: 0, disabled)",
+    )
 
     args = parser.parse_args()
 
@@ -88,6 +100,9 @@ def main():
     print(f"  Host: {args.host}")
     print(f"  Port: {args.port}")
     print(f"  GPU memory utilization: {args.gpu_memory_utilization}")
+    print(f"  Max model length: {args.max_model_len}")
+    if args.cpu_offload_gb > 0:
+        print(f"  CPU offload: {args.cpu_offload_gb} GiB")
     print()
 
     # Build vLLM serve command
@@ -105,12 +120,18 @@ def main():
         str(args.port),
         "--gpu-memory-utilization",
         str(args.gpu_memory_utilization),
+        "--max-model-len",
+        str(args.max_model_len),
         "--trust-remote-code",
         "--served-model-name",
         model_name,
         "--max-num-seqs",
         "64",  # Reduce from default 256 to avoid OOM during warmup
     ]
+
+    # Add CPU offload if specified
+    if args.cpu_offload_gb > 0:
+        cmd.extend(["--cpu-offload-gb", str(args.cpu_offload_gb)])
 
     # Execute vLLM server
     try:
