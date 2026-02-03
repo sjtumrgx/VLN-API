@@ -4,9 +4,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="/data1/Qwen3VL/.venv"
-LOG_DIR="/data1/Qwen3VL/logs"
-PID_FILE="/data1/Qwen3VL/vllm.pid"
+VENV_DIR="$SCRIPT_DIR/.venv"
+LOG_DIR="$SCRIPT_DIR/logs"
+PID_FILE="$SCRIPT_DIR/vllm.pid"
 LOG_FILE="$LOG_DIR/vllm.log"
 
 # Default values

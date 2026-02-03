@@ -232,7 +232,7 @@ The deploy script will:
 On the remote server:
 
 ```bash
-cd /data1/Qwen3VL/inference
+cd /home/eilab/VLN-API/inference
 
 # Start server with 8B model (default)
 ./manage.sh start --model 8b --daemon
