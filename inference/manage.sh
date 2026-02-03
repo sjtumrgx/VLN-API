@@ -26,7 +26,7 @@ usage() {
     echo "  health   Check server health and GPU status"
     echo ""
     echo "Options for start/restart:"
-    echo "  --model, -m       Model to load: 8b, 30b, 30b-thinking, or 32b (default: $MODEL)"
+    echo "  --model, -m       Model to load: 8b, 8b-thinking, 30b, 30b-thinking, or 32b (default: $MODEL)"
     echo "  --port, -p        Port to bind (default: $PORT)"
     echo "  --host            Host to bind (default: $HOST)"
     echo "  --tensor-parallel-size, -tp  Number of GPUs (default: $TENSOR_PARALLEL_SIZE)"

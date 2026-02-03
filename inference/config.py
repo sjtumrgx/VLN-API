@@ -8,6 +8,10 @@ MODELS = {
         "name": "Qwen3-VL-8B-Instruct",
         "path": f"{MODEL_BASE_PATH}/models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
     },
+    "8b-thinking": {
+        "name": "Qwen3-VL-8B-Thinking",
+        "path": f"{MODEL_BASE_PATH}/models--Qwen--Qwen3-VL-8B-Thinking/snapshots/92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b",
+    },
     "30b": {
         "name": "Qwen3-VL-30B-A3B-Instruct",
         "path": f"{MODEL_BASE_PATH}/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",

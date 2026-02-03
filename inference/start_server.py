@@ -35,9 +35,9 @@ def main():
     parser.add_argument(
         "--model",
         "-m",
-        choices=["8b", "30b", "30b-thinking", "32b"],
+        choices=["8b", "8b-thinking", "30b", "30b-thinking", "32b"],
         default=os.environ.get("MODEL", DEFAULT_MODEL),
-        help=f"Model to load: 8b, 30b, 30b-thinking, or 32b (default: {DEFAULT_MODEL})",
+        help=f"Model to load: 8b, 8b-thinking, 30b, 30b-thinking, or 32b (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--tensor-parallel-size",
