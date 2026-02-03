@@ -38,7 +38,8 @@ class OpenAICompatibleClient(BaseLLMClient):
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            # Disable proxy - don't read from environment variables
+            self._client = httpx.AsyncClient(timeout=self.timeout, trust_env=False)
         return self._client
 
     async def generate(
@@ -97,13 +98,14 @@ class OpenAICompatibleClient(BaseLLMClient):
         last_error = None
         for attempt in range(self.max_retries):
             try:
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
                 response = await client.post(
                     url,
                     json=request_body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {self.api_key}",
-                    },
+                    headers=headers,
                 )
 
                 if response.status_code == 429:

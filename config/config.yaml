@@ -31,6 +31,12 @@ api:
       model: "gemini-3-pro-preview"
       format: "openai"
 
+    - name: "RTX5000"
+      base_url: "http://192.168.1.100:8000"
+      api_key: ""
+      model: "Qwen3-VL-8B-Instruct"
+      format: "openai"
+
   # Legacy format (for backward compatibility, used if profiles is empty)
   # format: "openai"
   # gemini:
