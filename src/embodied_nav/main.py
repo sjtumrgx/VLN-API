@@ -4,6 +4,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -25,7 +26,7 @@ class Profile:
     model: str
     format: str  # "gemini" or "openai"
 
-from .unified_analyzer import UnifiedAnalyzer
+from .unified_analyzer import UnifiedAnalyzer, UnifiedAnalysisResult
 from .video_capture import VideoCapture
 from .visualization import Visualizer
 from .waypoint_generation import WaypointGenerator
@@ -337,6 +338,12 @@ class EmbodiedNavigationSystem:
         # Translated user task (will be set after first API call)
         self.user_task_english = None
 
+        # Shared state for decoupled VLM/display loops (P0)
+        self._latest_result: Optional[UnifiedAnalysisResult] = None
+        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_pad_h: int = 0
+        self._vlm_running: bool = False
+
     async def run(self):
         """Run the main navigation loop."""
         if self.offline_mode:
@@ -345,7 +352,7 @@ class EmbodiedNavigationSystem:
             await self._run_realtime()
 
     async def _run_realtime(self):
-        """Run real-time processing mode (camera or live stream)."""
+        """Run real-time processing mode with decoupled VLM and display loops."""
         logger.info("Starting real-time navigation system...")
 
         # Start video capture
@@ -357,15 +364,95 @@ class EmbodiedNavigationSystem:
         logger.info("Video capture started. Press 'q' to quit.")
 
         try:
-            while self._running and not self._shutdown_event.is_set():
-                await self._process_frame_realtime()
+            # Run VLM and display loops concurrently
+            await asyncio.gather(
+                self._vlm_loop_realtime(),
+                self._display_loop_realtime(),
+            )
         except asyncio.CancelledError:
             logger.info("Navigation loop cancelled")
         finally:
             await self.shutdown()
 
+    async def _vlm_loop_realtime(self):
+        """VLM inference loop: capture frame -> call VLM -> update shared state."""
+        loop = asyncio.get_event_loop()
+        while self._running and not self._shutdown_event.is_set():
+            # Get frame from capture (non-blocking via executor)
+            frame = await loop.run_in_executor(
+                None, self.video_capture.get_frame, 1.0
+            )
+            if frame is None:
+                await asyncio.sleep(0.05)
+                continue
+
+            # Letterbox frame for consistent processing
+            frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
+
+            # Update latest frame for display loop
+            self._latest_frame = frame
+            self._latest_pad_h = pad_h
+
+            try:
+                self._vlm_running = True
+                result = await self.unified_analyzer.analyze(
+                    frame=frame,
+                    task=self.goal,
+                    pad_h=pad_h,
+                )
+                self._vlm_running = False
+
+                logger.debug(f"Scene: {result.scene_summary}")
+                logger.debug(f"Intent: {result.intent}")
+                self.visualizer.log_waypoints(result.waypoints)
+
+                # Update translated task if available
+                if result.task_english and not self.user_task_english:
+                    self.user_task_english = result.task_english
+
+                self._latest_result = result
+
+            except Exception as e:
+                self._vlm_running = False
+                logger.error(f"Error in VLM loop: {e}")
+
+    async def _display_loop_realtime(self):
+        """Display loop: render latest frame with latest VLM result at ~30fps."""
+        while self._running and not self._shutdown_event.is_set():
+            frame = self._latest_frame
+            result = self._latest_result
+            pad_h = self._latest_pad_h
+
+            if frame is None:
+                await asyncio.sleep(1 / 30)
+                continue
+
+            # Render visualization with latest VLM result overlay
+            if result is not None:
+                vis_frame = self.visualizer.render(
+                    frame.copy(),
+                    scene_summary=result.scene_summary,
+                    task_understanding=result.task_understanding,
+                    intent=result.intent,
+                    waypoints=result.waypoints,
+                    waypoint_generator=self.waypoint_generator,
+                    linear_velocity=result.linear_velocity,
+                    angular_velocity=result.angular_velocity,
+                    pad_h=pad_h,
+                    user_task=self.user_task_english or result.task_english,
+                )
+            else:
+                vis_frame = frame.copy()
+
+            # Show frame
+            key = self.visualizer.show(vis_frame)
+            if key == ord('q') or key == ord('Q'):
+                self._running = False
+
+            await asyncio.sleep(1 / 30)
+
     async def _run_offline(self):
-        """Run offline video processing mode."""
+        """Run offline video processing with decoupled VLM and display loops."""
         source = self.config["video"]["source"]
         logger.info(f"Starting offline video processing: {source}")
 
@@ -387,33 +474,27 @@ class EmbodiedNavigationSystem:
 
         logger.info(f"Video FPS: {fps}, Total frames: {total_frames}, Sample interval: {sample_interval}")
         logger.info(f"Task: {self.goal}")
-        logger.info("Press 'q' to quit, any other key to continue to next frame.")
+        logger.info("Press 'q' to quit.")
 
         # Initialize video writer if export is enabled
         if self.export_enabled:
             self._init_video_writer(source, fps, sample_interval)
 
         self._running = True
-        frame_idx = 0
-        processed_count = 0
+
+        # Shared state for offline frame reading
+        self._offline_cap = cap
+        self._offline_fps = fps
+        self._offline_total_frames = total_frames
+        self._offline_sample_interval = sample_interval
+        self._offline_frame_idx = 0
+        self._offline_done = False
 
         try:
-            while self._running and not self._shutdown_event.is_set():
-                ret, frame = cap.read()
-                if not ret:
-                    logger.info("Video processing complete.")
-                    break
-
-                # Sample frames at interval
-                if frame_idx % sample_interval == 0:
-                    processed_count += 1
-                    logger.info(f"Processing frame {frame_idx}/{total_frames} (#{processed_count})")
-
-                    # Process and display frame
-                    await self._process_frame_offline(frame, frame_idx, total_frames)
-
-                frame_idx += 1
-
+            await asyncio.gather(
+                self._vlm_loop_offline(),
+                self._display_loop_offline(),
+            )
         except asyncio.CancelledError:
             logger.info("Video processing cancelled")
         finally:
@@ -421,10 +502,121 @@ class EmbodiedNavigationSystem:
             self._close_video_writer()
             await self.shutdown()
 
-        logger.info(f"Processed {processed_count} frames from {total_frames} total frames")
+    async def _vlm_loop_offline(self):
+        """VLM loop for offline mode: read frames and run VLM asynchronously."""
+        cap = self._offline_cap
+        sample_interval = self._offline_sample_interval
+        total_frames = self._offline_total_frames
+        processed_count = 0
+
+        while self._running and not self._shutdown_event.is_set():
+            if self._offline_done:
+                break
+
+            # Read next frame (blocking I/O via executor)
+            loop = asyncio.get_event_loop()
+            ret, frame = await loop.run_in_executor(None, cap.read)
+            if not ret:
+                logger.info("Video processing complete.")
+                self._offline_done = True
+                break
+
+            frame_idx = self._offline_frame_idx
+            self._offline_frame_idx += 1
+
+            # Letterbox every frame for display
+            lb_frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
+            self._latest_frame = lb_frame
+            self._latest_pad_h = pad_h
+
+            # Only run VLM on sampled frames
+            if frame_idx % sample_interval != 0:
+                continue
+
+            processed_count += 1
+            logger.info(f"Processing frame {frame_idx}/{total_frames} (#{processed_count})")
+
+            try:
+                self._vlm_running = True
+                result = await self.unified_analyzer.analyze(
+                    frame=lb_frame,
+                    task=self.goal,
+                    pad_h=pad_h,
+                )
+                self._vlm_running = False
+
+                logger.info(f"Scene: {result.scene_summary}")
+                logger.info(f"Intent: {result.intent}")
+                self.visualizer.log_waypoints(result.waypoints)
+
+                if result.task_english and not self.user_task_english:
+                    self.user_task_english = result.task_english
+
+                self._latest_result = result
+
+            except Exception as e:
+                self._vlm_running = False
+                logger.error(f"Error processing frame {frame_idx}: {e}")
+
+        logger.info(f"VLM processed {processed_count} frames from {total_frames} total")
+
+    async def _display_loop_offline(self):
+        """Display loop for offline mode: render every frame with latest VLM overlay."""
+        frame_delay = 1.0 / max(1.0, self._offline_fps)
+
+        while self._running and not self._shutdown_event.is_set():
+            frame = self._latest_frame
+            result = self._latest_result
+            pad_h = self._latest_pad_h
+
+            if frame is None:
+                if self._offline_done:
+                    break
+                await asyncio.sleep(frame_delay)
+                continue
+
+            # Render visualization with latest VLM result overlay
+            if result is not None:
+                vis_frame = self.visualizer.render(
+                    frame.copy(),
+                    scene_summary=result.scene_summary,
+                    task_understanding=result.task_understanding,
+                    intent=result.intent,
+                    waypoints=result.waypoints,
+                    waypoint_generator=self.waypoint_generator,
+                    linear_velocity=result.linear_velocity,
+                    angular_velocity=result.angular_velocity,
+                    pad_h=pad_h,
+                    user_task=self.user_task_english or result.task_english,
+                )
+            else:
+                vis_frame = frame.copy()
+
+            # Add frame info overlay
+            info_text = f"Frame: {self._offline_frame_idx}/{self._offline_total_frames}"
+            cv2.putText(vis_frame, info_text, (10, vis_frame.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            # Write frame to video if export is enabled
+            self._write_frame(vis_frame)
+
+            # Show frame
+            key = self.visualizer.show(vis_frame)
+            if key == ord('q') or key == ord('Q'):
+                self._running = False
+
+            if self._offline_done and self._latest_frame is not None:
+                # Video ended, stop display loop
+                break
+
+            await asyncio.sleep(frame_delay)
 
     def _init_video_writer(self, source: str, source_fps: float, sample_interval: int):
-        """Initialize video writer for export."""
+        """Initialize video writer for export.
+
+        In decoupled mode, every displayed frame is written, so output FPS
+        matches the source FPS (adjusted by speed multiplier).
+        """
         # Determine output path
         if self.export_path:
             output_path = self.export_path
@@ -474,120 +666,6 @@ class EmbodiedNavigationSystem:
         """Write frame to video file."""
         if self._video_writer is not None and self._video_writer.isOpened():
             self._video_writer.write(frame)
-
-    async def _process_frame_realtime(self):
-        """Process a single frame in real-time mode."""
-        # Get frame from capture
-        frame = self.video_capture.get_frame(timeout=1.0)
-        if frame is None:
-            await asyncio.sleep(0.1)
-            return
-
-        # Letterbox frame for consistent processing
-        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
-
-        try:
-            # Run unified analysis (single API call)
-            result = await self.unified_analyzer.analyze(
-                frame=frame,
-                task=self.goal,
-                pad_h=pad_h,
-            )
-
-            logger.debug(f"Scene: {result.scene_summary}")
-            logger.debug(f"Intent: {result.intent}")
-
-            # Log waypoints
-            self.visualizer.log_waypoints(result.waypoints)
-
-            # Render visualization
-            # Update translated task if available
-            if result.task_english and not self.user_task_english:
-                self.user_task_english = result.task_english
-
-            vis_frame = self.visualizer.render(
-                frame,
-                scene_summary=result.scene_summary,
-                task_understanding=result.task_understanding,
-                intent=result.intent,
-                waypoints=result.waypoints,
-                waypoint_generator=self.waypoint_generator,
-                linear_velocity=result.linear_velocity,
-                angular_velocity=result.angular_velocity,
-                pad_h=pad_h,
-                user_task=self.user_task_english or result.task_english,
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing frame: {e}")
-            vis_frame = frame
-
-        # Show frame
-        key = self.visualizer.show(vis_frame)
-
-        # Check for quit
-        if key == ord('q') or key == ord('Q'):
-            self._running = False
-
-    async def _process_frame_offline(self, frame, frame_idx: int, total_frames: int):
-        """Process a single frame in offline mode."""
-        # Letterbox frame for consistent processing
-        frame, scale, (pad_w, pad_h) = letterbox(frame, target_size=self.target_size)
-
-        try:
-            # Run unified analysis (single API call)
-            result = await self.unified_analyzer.analyze(
-                frame=frame,
-                task=self.goal,
-                pad_h=pad_h,
-            )
-
-            logger.info(f"Scene: {result.scene_summary}")
-            logger.info(f"Intent: {result.intent}")
-
-            # Log waypoints
-            self.visualizer.log_waypoints(result.waypoints)
-
-            # Render visualization
-            # Update translated task if available
-            if result.task_english and not self.user_task_english:
-                self.user_task_english = result.task_english
-
-            vis_frame = self.visualizer.render(
-                frame,
-                scene_summary=result.scene_summary,
-                task_understanding=result.task_understanding,
-                intent=result.intent,
-                waypoints=result.waypoints,
-                waypoint_generator=self.waypoint_generator,
-                linear_velocity=result.linear_velocity,
-                angular_velocity=result.angular_velocity,
-                pad_h=pad_h,
-                user_task=self.user_task_english or result.task_english,
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing frame {frame_idx}: {e}")
-            vis_frame = frame
-
-        # Add frame info overlay
-        info_text = f"Frame: {frame_idx}/{total_frames}"
-        cv2.putText(vis_frame, info_text, (10, vis_frame.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        # Write frame to video if export is enabled
-        self._write_frame(vis_frame)
-
-        # Show frame and wait for key
-        key = self.visualizer.show(vis_frame)
-
-        # In offline mode, wait longer for user to see the result
-        # Press 'q' to quit, any other key or timeout to continue
-        if key == ord('q') or key == ord('Q'):
-            self._running = False
-        elif key == -1:
-            # No key pressed within waitKey timeout, continue automatically
-            await asyncio.sleep(0.5)  # Brief pause between frames
 
     async def shutdown(self):
         """Shutdown the system gracefully."""
