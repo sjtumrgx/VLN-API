@@ -73,6 +73,10 @@ image:
   target_size: [640, 640]
   # JPEG compression quality for VLM input (0-100, lower = smaller/faster)
   jpeg_quality: 75
+  # Frame change detection threshold (0 = disabled, always call VLM)
+  change_threshold: 15.0
+  # Max seconds before forcing a VLM call even if scene unchanged
+  max_staleness: 5.0
 
 # Video export settings
 export:

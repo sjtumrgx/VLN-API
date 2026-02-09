@@ -351,6 +351,13 @@ class EmbodiedNavigationSystem:
         self._result_timestamp: float = 0.0
         self._blend_duration: float = 0.5  # seconds to blend between results
 
+        # Frame change detection state (P3)
+        image_config = self.config.get("image", {})
+        self._change_threshold: float = image_config.get("change_threshold", 15.0)
+        self._max_staleness: float = image_config.get("max_staleness", 5.0)
+        self._last_vlm_frame: Optional[np.ndarray] = None
+        self._last_vlm_time: float = 0.0
+
     async def run(self):
         """Run the main navigation loop."""
         if self.offline_mode:
@@ -400,6 +407,10 @@ class EmbodiedNavigationSystem:
             self._latest_frame = frame
             self._latest_pad_h = pad_h
 
+            # Skip VLM if scene hasn't changed significantly (P3)
+            if not self._should_call_vlm(frame):
+                continue
+
             try:
                 self._vlm_running = True
                 result = await self.unified_analyzer.analyze(
@@ -408,6 +419,8 @@ class EmbodiedNavigationSystem:
                     pad_h=pad_h,
                 )
                 self._vlm_running = False
+                self._last_vlm_frame = frame.copy()
+                self._last_vlm_time = time.monotonic()
 
                 logger.debug(f"Scene: {result.scene_summary}")
                 logger.debug(f"Intent: {result.intent}")
@@ -543,6 +556,12 @@ class EmbodiedNavigationSystem:
             if frame_idx % sample_interval != 0:
                 continue
 
+            # Skip VLM if scene hasn't changed significantly (P3)
+            if not self._should_call_vlm(lb_frame):
+                processed_count += 1
+                logger.info(f"Skipped frame {frame_idx}/{total_frames} (#{processed_count}, scene unchanged)")
+                continue
+
             processed_count += 1
             logger.info(f"Processing frame {frame_idx}/{total_frames} (#{processed_count})")
 
@@ -554,6 +573,8 @@ class EmbodiedNavigationSystem:
                     pad_h=pad_h,
                 )
                 self._vlm_running = False
+                self._last_vlm_frame = lb_frame.copy()
+                self._last_vlm_time = time.monotonic()
 
                 logger.info(f"Scene: {result.scene_summary}")
                 logger.info(f"Intent: {result.intent}")
@@ -679,6 +700,40 @@ class EmbodiedNavigationSystem:
         """Write frame to video file."""
         if self._video_writer is not None and self._video_writer.isOpened():
             self._video_writer.write(frame)
+
+    def _should_call_vlm(self, frame: np.ndarray) -> bool:
+        """Check if VLM should be called based on frame change detection.
+
+        Args:
+            frame: Current letterboxed frame
+
+        Returns:
+            True if VLM should be called, False to skip
+        """
+        # Always call for the first frame
+        if self._last_vlm_frame is None:
+            return True
+
+        # Disabled if threshold is 0
+        if self._change_threshold <= 0:
+            return True
+
+        # Force call if results are stale
+        if self._max_staleness > 0:
+            elapsed = time.monotonic() - self._last_vlm_time
+            if elapsed >= self._max_staleness:
+                logger.debug("VLM call forced due to staleness timer")
+                return True
+
+        # Compute mean absolute difference between frames
+        diff = cv2.absdiff(frame, self._last_vlm_frame)
+        mean_diff = diff.mean()
+
+        if mean_diff < self._change_threshold:
+            logger.debug(f"Frame change {mean_diff:.1f} < threshold {self._change_threshold}, skipping VLM")
+            return False
+
+        return True
 
     def _get_display_result(self) -> Optional[UnifiedAnalysisResult]:
         """Get the interpolated result for display, blending between prev and current."""
