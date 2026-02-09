@@ -29,7 +29,7 @@ class Profile:
 from .unified_analyzer import UnifiedAnalyzer, UnifiedAnalysisResult
 from .video_capture import VideoCapture
 from .visualization import Visualizer
-from .waypoint_generation import WaypointGenerator
+from .waypoint_generation import Waypoint, WaypointGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +346,11 @@ class EmbodiedNavigationSystem:
         self._latest_pad_h: int = 0
         self._vlm_running: bool = False
 
+        # Interpolation state (P2)
+        self._prev_result: Optional[UnifiedAnalysisResult] = None
+        self._result_timestamp: float = 0.0
+        self._blend_duration: float = 0.5  # seconds to blend between results
+
     async def run(self):
         """Run the main navigation loop."""
         if self.offline_mode:
@@ -412,6 +417,9 @@ class EmbodiedNavigationSystem:
                 if result.task_english and not self.user_task_english:
                     self.user_task_english = result.task_english
 
+                # Save previous result for interpolation (P2)
+                self._prev_result = self._latest_result
+                self._result_timestamp = time.monotonic()
                 self._latest_result = result
 
             except Exception as e:
@@ -422,7 +430,7 @@ class EmbodiedNavigationSystem:
         """Display loop: render latest frame with latest VLM result at ~30fps."""
         while self._running and not self._shutdown_event.is_set():
             frame = self._latest_frame
-            result = self._latest_result
+            result = self._get_display_result()
             pad_h = self._latest_pad_h
 
             if frame is None:
@@ -554,6 +562,9 @@ class EmbodiedNavigationSystem:
                 if result.task_english and not self.user_task_english:
                     self.user_task_english = result.task_english
 
+                # Save previous result for interpolation (P2)
+                self._prev_result = self._latest_result
+                self._result_timestamp = time.monotonic()
                 self._latest_result = result
 
             except Exception as e:
@@ -568,7 +579,7 @@ class EmbodiedNavigationSystem:
 
         while self._running and not self._shutdown_event.is_set():
             frame = self._latest_frame
-            result = self._latest_result
+            result = self._get_display_result()
             pad_h = self._latest_pad_h
 
             if frame is None:
@@ -668,6 +679,71 @@ class EmbodiedNavigationSystem:
         """Write frame to video file."""
         if self._video_writer is not None and self._video_writer.isOpened():
             self._video_writer.write(frame)
+
+    def _get_display_result(self) -> Optional[UnifiedAnalysisResult]:
+        """Get the interpolated result for display, blending between prev and current."""
+        current = self._latest_result
+        prev = self._prev_result
+        if current is None:
+            return None
+        if prev is None:
+            return current
+
+        # Calculate blend factor based on elapsed time since result update
+        elapsed = time.monotonic() - self._result_timestamp
+        blend = min(1.0, elapsed / self._blend_duration)
+
+        if blend >= 1.0:
+            return current
+
+        return self._interpolate_results(prev, current, blend)
+
+    def _interpolate_results(
+        self,
+        prev: UnifiedAnalysisResult,
+        current: UnifiedAnalysisResult,
+        t: float,
+    ) -> UnifiedAnalysisResult:
+        """Interpolate between two VLM results.
+
+        Args:
+            prev: Previous VLM result
+            current: Current VLM result
+            t: Blend factor 0.0 (all prev) to 1.0 (all current)
+
+        Returns:
+            Interpolated result
+        """
+        # Lerp waypoint x-coordinates (y is fixed by vertical position)
+        interp_waypoints = []
+        num_wp = min(len(prev.waypoints), len(current.waypoints))
+        for i in range(num_wp):
+            wp_prev = prev.waypoints[i]
+            wp_cur = current.waypoints[i]
+            x = int(wp_prev.x + t * (wp_cur.x - wp_prev.x))
+            y = int(wp_prev.y + t * (wp_cur.y - wp_prev.y))
+            interp_waypoints.append(Waypoint(index=wp_cur.index, x=x, y=y))
+
+        # If current has more waypoints, append them directly
+        for i in range(num_wp, len(current.waypoints)):
+            interp_waypoints.append(current.waypoints[i])
+
+        # Lerp velocities
+        linear_v = prev.linear_velocity + t * (current.linear_velocity - prev.linear_velocity)
+        angular_v = prev.angular_velocity + t * (current.angular_velocity - prev.angular_velocity)
+
+        # Strings snap to current immediately
+        return UnifiedAnalysisResult(
+            scene_summary=current.scene_summary,
+            task_understanding=current.task_understanding,
+            intent=current.intent,
+            reasoning=current.reasoning,
+            waypoints=interp_waypoints,
+            linear_velocity=linear_v,
+            angular_velocity=angular_v,
+            task_english=current.task_english,
+            raw_response=current.raw_response,
+        )
 
     async def shutdown(self):
         """Shutdown the system gracefully."""
