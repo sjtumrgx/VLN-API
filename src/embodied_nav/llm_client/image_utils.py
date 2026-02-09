@@ -92,6 +92,7 @@ def encode_image_to_base64(
     image: Union[np.ndarray, Image.Image, bytes, str, Path],
     apply_letterbox: bool = True,
     target_size: Tuple[int, int] = (640, 640),
+    jpeg_quality: int = 95,
 ) -> Tuple[ImageInput, Optional[LetterboxInfo]]:
     """Encode an image to base64 for LLM API.
 
@@ -99,6 +100,7 @@ def encode_image_to_base64(
         image: Image as numpy array (BGR), PIL Image, bytes, or file path
         apply_letterbox: Whether to apply letterbox resize (default True)
         target_size: Target size for letterbox (default 640x640)
+        jpeg_quality: JPEG compression quality 0-100 (default 95)
 
     Returns:
         Tuple of (ImageInput with base64 encoded data, LetterboxInfo or None)
@@ -139,8 +141,10 @@ def encode_image_to_base64(
             target_size=target_size,
         )
 
-    # Encode to JPEG
-    success, encoded = cv2.imencode(".jpg", img_array)
+    # Encode to JPEG with configurable quality
+    success, encoded = cv2.imencode(
+        ".jpg", img_array, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+    )
     if not success:
         raise ValueError("Failed to encode image")
 

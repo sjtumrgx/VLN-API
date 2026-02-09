@@ -31,6 +31,12 @@ api:
       model: "gemini-3-pro-preview"
       format: "openai"
 
+    - name: "ModelScope"
+      base_url: "https://api-inference.modelscope.cn"
+      api_key: "ms-0c86e4f9-2665-4c52-b967-b5e38f611a49"
+      model: "Qwen/Qwen3-VL-8B-Instruct"
+      format: "openai"
+
     - name: "RTX5000"
       base_url: "http://192.168.1.100:8000"
       api_key: ""
@@ -64,7 +70,9 @@ video:
 # Image processing settings
 image:
   # Target size for letterbox resize [width, height]
-  target_size: [960, 960]
+  target_size: [640, 640]
+  # JPEG compression quality for VLM input (0-100, lower = smaller/faster)
+  jpeg_quality: 75
 
 # Video export settings
 export:

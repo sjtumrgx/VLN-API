@@ -57,15 +57,17 @@ UNIFIED_SYSTEM_PROMPT = """Robot navigation system. Origin top-left, x right, y 
 class UnifiedAnalyzer:
     """Unified analyzer for single-request scene understanding and navigation."""
 
-    def __init__(self, llm_client: BaseLLMClient, num_waypoints: int = 5):
+    def __init__(self, llm_client: BaseLLMClient, num_waypoints: int = 5, jpeg_quality: int = 95):
         """Initialize unified analyzer.
 
         Args:
             llm_client: LLM client for vision analysis
             num_waypoints: Number of waypoints to generate (default 5)
+            jpeg_quality: JPEG compression quality for image encoding (default 95)
         """
         self.llm_client = llm_client
         self.num_waypoints = num_waypoints
+        self.jpeg_quality = jpeg_quality
 
     async def analyze(
         self,
@@ -89,7 +91,9 @@ class UnifiedAnalyzer:
         y_positions = self._calculate_vertical_positions(height, pad_h)
 
         # Encode image (no letterbox needed - frame is already resized)
-        image_input, _ = encode_image_to_base64(frame, apply_letterbox=False)
+        image_input, _ = encode_image_to_base64(
+            frame, apply_letterbox=False, jpeg_quality=self.jpeg_quality
+        )
 
         # Build prompt
         center_x = width // 2

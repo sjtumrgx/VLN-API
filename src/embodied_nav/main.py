@@ -309,9 +309,11 @@ class EmbodiedNavigationSystem:
             )
 
         # Unified analyzer (combines scene analysis, task reasoning, waypoint generation)
+        jpeg_quality = image_config.get("jpeg_quality", 95)
         self.unified_analyzer = UnifiedAnalyzer(
             llm_client=self.llm_client,
             num_waypoints=self.config["waypoints"]["count"],
+            jpeg_quality=jpeg_quality,
         )
 
         # Waypoint generator (for smooth curve rendering only)
