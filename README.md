@@ -162,6 +162,20 @@ uv run python -m embodied_nav --log-level DEBUG
    - Bounding boxes for objects/obstacles
    - Navigation intent overlay
 
+## Performance Optimizations
+
+The system includes several optimizations for fluid real-time operation:
+
+- **Decoupled VLM/Display Loops**: VLM inference and visualization run as concurrent async tasks via `asyncio.gather()`. The display loop renders at ~30fps using the latest camera frame and most recent VLM result, while the VLM loop processes frames independently. This eliminates the "freeze during inference" problem.
+
+- **Reduced Image Size & JPEG Quality**: Configurable `target_size` (default 640x640) and `jpeg_quality` (default 75) reduce the image payload sent to the VLM, lowering per-call latency without significant quality loss.
+
+- **Trajectory Interpolation**: When new VLM results arrive, waypoint positions and velocities are smoothly interpolated over a 0.5s blend duration, preventing jarring visual jumps between consecutive VLM outputs.
+
+- **Frame Change Detection**: Before each VLM call, the system computes the mean absolute difference between the current frame and the last frame sent to VLM. If the difference is below a configurable threshold (`change_threshold`, default 15.0), the VLM call is skipped. A staleness timer (`max_staleness`, default 5s) forces periodic updates even for static scenes.
+
+- **Streaming VLM Responses**: Both OpenAI-compatible and Gemini native clients support streaming transport (`generate_stream()`), which can reduce overall latency by starting response processing before the full response arrives.
+
 ## Keyboard Controls
 
 - `q` or `Q`: Quit the application

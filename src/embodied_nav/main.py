@@ -308,6 +308,11 @@ class EmbodiedNavigationSystem:
                 model=profile.model,
             )
 
+        # Image processing settings
+        image_config = self.config.get("image", {})
+        target_size = image_config.get("target_size", [640, 640])
+        self.target_size = tuple(target_size)
+
         # Unified analyzer (combines scene analysis, task reasoning, waypoint generation)
         jpeg_quality = image_config.get("jpeg_quality", 95)
         self.unified_analyzer = UnifiedAnalyzer(
@@ -331,11 +336,6 @@ class EmbodiedNavigationSystem:
             left_box_width=vis_config.get("left_box_width", 0.22),
             right_box_width=vis_config.get("right_box_width", 0.22),
         )
-
-        # Image processing settings
-        image_config = self.config.get("image", {})
-        target_size = image_config.get("target_size", [640, 640])
-        self.target_size = tuple(target_size)
 
         # Translated user task (will be set after first API call)
         self.user_task_english = None
