@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import logging
 from typing import Optional
 
@@ -173,6 +174,128 @@ class OpenAICompatibleClient(BaseLLMClient):
             usage=usage,
             raw_response=data,
         )
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        image: Optional[ImageInput] = None,
+        system_prompt: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate a response using streaming transport for reduced latency.
+
+        Uses SSE streaming to accumulate response chunks, which can reduce
+        overall latency on some providers by starting processing earlier.
+
+        Args:
+            prompt: User prompt text
+            image: Optional image input
+            system_prompt: Optional system prompt
+
+        Returns:
+            Normalized LLM response with complete text
+        """
+        client = await self._get_client()
+
+        # Build messages (same as non-streaming)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        if image:
+            image_b64 = base64.b64encode(image.data).decode("utf-8")
+            content = [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{image.mime_type};base64,{image_b64}"
+                    }
+                },
+                {"type": "text", "text": prompt}
+            ]
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": prompt})
+
+        request_body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,
+            "stream": True,
+        }
+
+        url = f"{self.base_url}/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                accumulated_text = ""
+                async with client.stream(
+                    "POST", url, json=request_body, headers=headers
+                ) as response:
+                    if response.status_code == 429:
+                        await response.aread()
+                        wait_time = 2 ** attempt
+                        logger.warning(f"Rate limited (stream), waiting {wait_time}s")
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    if response.status_code >= 500:
+                        await response.aread()
+                        wait_time = 2 ** attempt
+                        logger.warning(f"Server error {response.status_code} (stream), retrying in {wait_time}s")
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    if response.status_code >= 400:
+                        body = await response.aread()
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {response.status_code}: {body.decode()}",
+                            request=response.request,
+                            response=response,
+                        )
+
+                    # Parse SSE chunks
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]  # Remove "data: " prefix
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            choices = chunk.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    accumulated_text += content
+                        except json.JSONDecodeError:
+                            continue
+
+                return LLMResponse(
+                    text=accumulated_text,
+                    model=self.model,
+                    usage={},
+                    raw_response={},
+                )
+
+            except httpx.TimeoutException as e:
+                last_error = e
+                wait_time = 2 ** attempt
+                logger.warning(f"Timeout (stream), retrying in {wait_time}s")
+                await asyncio.sleep(wait_time)
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.error(f"Unexpected error in stream: {e}")
+                break
+
+        raise last_error or Exception("Max retries exceeded (stream)")
 
     async def close(self):
         """Close the HTTP client."""

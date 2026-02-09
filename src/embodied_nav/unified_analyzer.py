@@ -108,8 +108,8 @@ class UnifiedAnalyzer:
             y5=y_positions[4],
         )
 
-        # Call LLM (single request)
-        response = await self.llm_client.generate(
+        # Call LLM (single request, using streaming transport for lower latency)
+        response = await self.llm_client.generate_stream(
             prompt=prompt,
             image=image_input,
             system_prompt=UNIFIED_SYSTEM_PROMPT,

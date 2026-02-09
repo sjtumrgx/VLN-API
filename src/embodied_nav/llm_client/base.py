@@ -74,6 +74,28 @@ class BaseLLMClient(ABC):
         """
         pass
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        image: Optional[ImageInput] = None,
+        system_prompt: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate a response using streaming transport for reduced latency.
+
+        Uses streaming internally to accumulate the response, which can
+        reduce time-to-completion on some providers. Falls back to
+        non-streaming generate() by default.
+
+        Args:
+            prompt: User prompt text
+            image: Optional image input for vision models
+            system_prompt: Optional system prompt
+
+        Returns:
+            Normalized LLM response with complete text
+        """
+        return await self.generate(prompt, image, system_prompt)
+
     @abstractmethod
     async def close(self):
         """Close the client and release resources."""
